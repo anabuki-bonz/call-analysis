@@ -1,5 +1,6 @@
 CDRデータ・レポートファイルを除外
-call_center/reports/
+call_center/reports/*
+!call_center/reports/dashboard.html
 call_center/*.csv
 call_center/data/*.csv
 **/__pycache__/
