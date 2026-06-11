@@ -215,6 +215,8 @@ def build_message(target_date: date, rdata: dict) -> str:
         "【🔍 要因分析】",
         *_format_factors(factors),
         "",
+        "【🌐 ダッシュボード】",
+        "https://anabuki-bonz.github.io/call-analysis/call_center/reports/dashboard.html",
         "[/info]",
     ]
     return "\n".join(lines)
