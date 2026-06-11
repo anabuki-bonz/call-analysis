@@ -9,10 +9,13 @@
       "mcp__claude_ai_Google_Drive__read_file_content",
       "Bash(python3 *)",
       "Bash(python *)",
+      "Bash(powershell.exe *)",
       "Bash(powershell *)",
       "Skill(keybindings-help)",
       "Bash(rm \"C:\\\\call-analysis\\\\config\\\\op_rooms.json\")",
-      "Bash(rmdir \"C:\\\\call-analysis\\\\config\")"
+      "Bash(rmdir \"C:\\\\call-analysis\\\\config\")",
+      "Bash(git *)",
+      "Bash(cd *)"
     ]
   }
 }

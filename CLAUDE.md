@@ -62,7 +62,7 @@ python -X utf8 call_center/notify.py YYYY-MM-DD
 
 ```bash
 cd "G:\マイドライブ\Claude Code\call-analysis"
-git add call_center/reports/dashboard.html
+git add .
 git commit -m "feat: update dashboard YYYY-MM-DD"
 git push
 ```
