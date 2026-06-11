@@ -1,0 +1,4 @@
+CDRデータ・レポートファイルを除外
+call_center/reports/
+call_center/*.csv
+.env

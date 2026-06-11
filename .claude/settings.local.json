@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(python3 -)",
+      "Bash(python3 -m pip install openpyxl -q)",
+      "mcp__claude_ai_Google_Drive__list_recent_files",
+      "mcp__claude_ai_Google_Drive__get_file_metadata",
+      "mcp__claude_ai_Google_Drive__read_file_content",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(powershell *)",
+      "Skill(keybindings-help)",
+      "Bash(rm \"C:\\\\call-analysis\\\\config\\\\op_rooms.json\")",
+      "Bash(rmdir \"C:\\\\call-analysis\\\\config\")"
+    ]
+  }
+}
