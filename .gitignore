@@ -1,4 +1,6 @@
 CDRデータ・レポートファイルを除外
 call_center/reports/
 call_center/*.csv
+call_center/data/*.csv
+**/__pycache__/
 .env
