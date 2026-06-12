@@ -19,7 +19,7 @@
 * 推測を事実として記載しない
 * 不明時は「確認できません」と記載
 * 出力は必要最小限
-* notify.py は最後に1回のみ実行
+* notify.py はSTEP4で最後に1回のみ実行
 
 ## 起動トリガー
 
@@ -29,7 +29,7 @@
 | M/D分析して | 指定日 |
 | M/D〜M/D分析して | 指定範囲（1日ずつ個別実行） |
 
-複数日指定時は各日ごとに STEP1〜STEP3 を実行し、日別にレポート生成・通知する。全日完了後に STEP4 を1回実行する。
+複数日指定時は各日ごとに STEP1〜STEP2 を実行し、日別にレポートを生成する。全日完了後に STEP3・STEP4 を各1回実行する。
 
 ## 実行手順
 
@@ -48,17 +48,7 @@ python -X utf8 call_center/fetch_sheets.py
 python -X utf8 call_center/analyze.py YYYY-MM-DD
 ```
 
-### STEP3: 通知送信
-
-```bash
-python -X utf8 call_center/notify.py YYYY-MM-DD
-```
-
-* STEP3は最後に1回のみ実行する
-* notify.py の重複実行禁止
-* exit code 0 を確認したら終了
-
-### STEP4: ダッシュボード公開
+### STEP3: ダッシュボード公開
 
 ```bash
 cd "G:\マイドライブ\Claude Code\call-analysis"
@@ -67,13 +57,25 @@ git commit -m "feat: update dashboard YYYY-MM-DD"
 git push
 ```
 
-* STEP3 の exit code 0 を確認してから実行する
 * commit メッセージの日付は分析対象日に置き換える
-* push 完了を確認したら終了
+* push 完了を確認したら次のステップへ
+
+### STEP4: 通知送信
+
+```bash
+sleep 120
+python -X utf8 call_center/notify.py YYYY-MM-DD
+```
+
+* STEP3 の push exit code 0 を確認してから実行する
+* push 後 120秒待機してから notify.py を実行する（GitHub Pages 反映待ち）
+* notify.py は最後に1回のみ実行する
+* notify.py の重複実行禁止
+* exit code 0 を確認したら終了
 
 ## 完了条件
 
-STEP4 の push が完了したら完了。
+STEP4 の exit code 0 を確認したら完了。
 
 完了後は「日次分析が完了しました。」のみ返答する。追加実行・追加分析・補足説明は行わない。
 
