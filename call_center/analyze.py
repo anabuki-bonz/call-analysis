@@ -1705,8 +1705,12 @@ def _scope_report_html(body_html: str, dk: str) -> str:
 
 
 def build_dashboard() -> None:
-    today  = date.today()
-    cutoff = today - timedelta(days=60)
+    today = date.today()
+    first_of_this_month = today.replace(day=1)
+    if first_of_this_month.month == 1:
+        cutoff = first_of_this_month.replace(year=first_of_this_month.year - 1, month=12)
+    else:
+        cutoff = first_of_this_month.replace(month=first_of_this_month.month - 1)
 
     reports: list[tuple[date, Path]] = []
     for p in sorted(DAILY_DIR.glob("*.html")):
