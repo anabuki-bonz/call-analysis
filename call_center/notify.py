@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import date
@@ -242,6 +243,8 @@ def send_message(token: str, room_id: str, message: str) -> None:
 
 def main() -> None:
     sys.stdout.reconfigure(encoding='utf-8')
+    print("⏳ GitHub Pages反映待ち中（120秒）...", flush=True)
+    time.sleep(120)
     load_dotenv(DOTENV_PATH)
 
     if len(sys.argv) >= 2:
