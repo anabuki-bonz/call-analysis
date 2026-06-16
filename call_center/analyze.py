@@ -990,7 +990,11 @@ def build_html(d: dict) -> str:
     _ab_stats.sort(key=lambda x: (x["rate"], -x["total"]))
 
     if _ab_stats:
-        ab_ranking_html = '<h3>特定案件ランキング（[A]/[B]・応答率90%未満）</h3>\n'
+        ab_ranking_html = (
+            '<details style="margin:1em 0">'
+            '<summary style="cursor:pointer;font-weight:bold;font-size:1.1em;padding:4px 0">'
+            '特定案件ランキング（[A]/[B]・応答率90%未満）</summary>\n'
+        )
         ab_ranking_html += (
             '<table><tr>'
             '<th style="text-align:left">案件名</th>'
@@ -1007,7 +1011,10 @@ def build_html(d: dict) -> str:
         ab_ranking_html += '</table>\n'
         for _p in _ab_stats:
             _pn = _p["name"]
-            ab_ranking_html += f'<h4 style="margin-top:1em">{_pn}</h4>\n'
+            ab_ranking_html += (
+                f'<details style="margin-top:0.8em">'
+                f'<summary style="cursor:pointer;font-weight:bold;padding:2px 0">{_pn}</summary>\n'
+            )
             _hg: dict = {}
             for _h, _c in _ab_by_proj[_pn]:
                 if _h not in _hg:
@@ -1037,7 +1044,8 @@ def build_html(d: dict) -> str:
                     f'<td>{_oh}</td>'
                     f'<td style="text-align:left">{_rstr}</td></tr>\n'
                 )
-            ab_ranking_html += '</table>\n'
+            ab_ranking_html += '</table>\n</details>\n'
+        ab_ranking_html += '</details>\n'
     else:
         ab_ranking_html = ""
 
@@ -1458,6 +1466,7 @@ function renderViewContent(id, el) {
   if (id === 'prev-month' || id === 'this-month') renderMonthView(el, id === 'this-month');
   else if (id === 'by-weekday') renderWeekdayView(el);
   else if (id === 'by-hour')    renderHourView(el);
+  else if (id === 'by-type')    renderTypeView(el);
 }
 function extFilterLabel() {
   if (extFilterExt)  return '内線 ' + extFilterExt;
@@ -1678,6 +1687,106 @@ function renderHourView(el) {
   html += '</table>';
   el.innerHTML = html;
 }
+function renderTypeView(el) {
+  var rows = getViewData();
+  rows = rows.slice().sort(function(a,b){return a.date.localeCompare(b.date);});
+  if (!rows.length) {
+    el.innerHTML = '<h2>種別別一覧</h2><p style="color:#aaa">データなし</p>';
+    return;
+  }
+  var allDates = rows.map(function(r){return r.date;});
+  var period = allDates[0] + ' 〜 ' + allDates[allDates.length-1];
+  var fl = extFilterLabel();
+  var titleSuffix = fl ? ' <span style="font-size:0.75em;background:#e8f0fe;color:#1a73e8;border-radius:3px;padding:2px 6px">'+fl+'</span>' : '';
+  var html = '<h2>種別別一覧'+titleSuffix+'</h2><p style="color:#777;font-size:0.9em">対象期間: '+period+'（'+rows.length+'日）</p>';
+
+  // Collect per-type per-day aggregates
+  var typeSet = {};
+  rows.forEach(function(day) {
+    (day.ext_daily || []).forEach(function(e) {
+      if (extFilterExt && e.ext !== extFilterExt) return;
+      if (extFilterType && e.type !== extFilterType) return;
+      if (!typeSet[e.type]) typeSet[e.type] = true;
+    });
+  });
+  var types = Object.keys(typeSet).sort(function(a,b){return Number(a)-Number(b)||a.localeCompare(b);});
+  if (!types.length) {
+    el.innerHTML = '<h2>種別別一覧</h2><p style="color:#aaa">絞り込み条件に一致するデータなし</p>';
+    return;
+  }
+
+  // Build day-level totals per type
+  function aggForDay(day, typeKey) {
+    var T=0, G=0;
+    (day.ext_daily || []).forEach(function(e) {
+      if (extFilterExt && e.ext !== extFilterExt) return;
+      if (typeKey !== null && e.type !== typeKey) return;
+      if (extFilterType && e.type !== extFilterType) return;
+      T += e.total; G += e.got;
+    });
+    return {total:T, got:G, missed:T-G, rate: T>0 ? Math.round(G/T*1000)/10 : null};
+  }
+
+  // Column headers: 合計 + each day
+  var headerRow = '<tr style="position:sticky;top:0;background:#f0f0f0;z-index:2">'
+    + '<th style="text-align:left;min-width:50px">種別</th>'
+    + '<th style="text-align:left;min-width:80px">種別名</th>'
+    + '<th style="text-align:left;min-width:60px">項目</th>'
+    + '<th style="min-width:60px">合計</th>';
+  allDates.forEach(function(d) {
+    var dayObj = rows.find(function(r){return r.date===d;});
+    var label = d.slice(5).replace('-','/') + (dayObj ? '('+dayObj.weekday+')' : '');
+    headerRow += '<th style="min-width:55px">'+label+'</th>';
+  });
+  headerRow += '</tr>';
+
+  // Build rows per group (合計 + each type)
+  function buildGroupRows(typeKey, typeName, showType) {
+    // Compute cumulative totals
+    var cumT=0, cumG=0;
+    rows.forEach(function(day){ var a=aggForDay(day,typeKey); cumT+=a.total; cumG+=a.got; });
+    var cumRate = cumT>0 ? Math.round(cumG/cumT*1000)/10 : null;
+    var rc0 = rateCls(cumRate);
+    var typeLabel = showType ? (typeKey !== null ? typeKey : '合計') : '';
+    var nameLabel = showType ? typeName : '';
+    var bg = typeKey === null ? 'background:#f8f8f8;font-weight:bold' : '';
+
+    var r1 = '<tr style="'+bg+'">'
+      + '<td rowspan="3" style="text-align:center;vertical-align:middle;font-weight:bold">'+typeLabel+'</td>'
+      + '<td rowspan="3" style="text-align:left;vertical-align:middle">'+nameLabel+'</td>'
+      + '<td style="text-align:left">着信数</td>'
+      + '<td style="text-align:right">'+cumT+'</td>';
+    var r2 = '<tr style="'+bg+'"><td style="text-align:left">取得数</td><td style="text-align:right">'+cumG+'</td>';
+    var r3 = '<tr style="'+bg+'"><td style="text-align:left">応答率</td>'
+      + '<td class="'+rc0+'" style="text-align:right">'+(cumRate!=null?cumRate+'%':'-')+'</td>';
+    allDates.forEach(function(d) {
+      var day = rows.find(function(r){return r.date===d;});
+      if (!day) { r1+='<td>-</td>'; r2+='<td>-</td>'; r3+='<td>-</td>'; return; }
+      var a = aggForDay(day, typeKey);
+      var rc = rateCls(a.rate);
+      r1 += '<td style="text-align:right">'+(a.total||'-')+'</td>';
+      r2 += '<td style="text-align:right">'+(a.got||'-')+'</td>';
+      r3 += '<td class="'+rc+'" style="text-align:right">'+(a.rate!=null?a.rate+'%':'-')+'</td>';
+    });
+    r1+='</tr>'; r2+='</tr>'; r3+='</tr>';
+    return r1+r2+r3;
+  }
+
+  html += '<div style="overflow-x:auto"><table style="border-collapse:collapse;min-width:max-content">';
+  html += headerRow;
+
+  // 合計行（絞り込みなし or 絞り込み適用済み合計）
+  html += buildGroupRows(null, '', true);
+
+  // 種別ごとの行
+  types.forEach(function(t) {
+    var name = (typeof typeNames !== 'undefined' && typeNames[t]) ? typeNames[t] : '';
+    html += buildGroupRows(t, name, true);
+  });
+
+  html += '</table></div>';
+  el.innerHTML = html;
+}
 """
 
 
@@ -1755,6 +1864,20 @@ def build_dashboard() -> None:
     dates_json      = str(available_dates).replace("'", '"')
     daily_data_json = json.dumps(all_daily_data, ensure_ascii=False)
 
+    ext_type_path = DATA_DIR / "ext_type.csv"
+    type_names: dict[str, str] = {}
+    if ext_type_path.exists():
+        try:
+            _et = pd.read_csv(ext_type_path, encoding="utf-8-sig")
+            for _, _row in _et.iterrows():
+                _no = _row.get("種別名称一覧 No.")
+                _nm = _row.get("名称")
+                if pd.notna(_no) and pd.notna(_nm) and str(_no).strip():
+                    type_names[str(int(float(_no)))] = str(_nm)
+        except Exception:
+            pass
+    type_names_json = json.dumps(type_names, ensure_ascii=False)
+
     dashboard_html = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -1781,6 +1904,7 @@ def build_dashboard() -> None:
     <div class="nav-label">集計ビュー</div>
     <button class="nav-btn" data-view="prev-month"  onclick="showView('prev-month')">📅 前月累計</button>
     <button class="nav-btn" data-view="this-month"  onclick="showView('this-month')">📊 当月累計</button>
+    <button class="nav-btn" data-view="by-type"     onclick="showView('by-type')">📋 種別別一覧</button>
     <button class="nav-btn" data-view="by-weekday"  onclick="showView('by-weekday')">📆 曜日別累計</button>
     <button class="nav-btn" data-view="by-hour"     onclick="showView('by-hour')">⏰ 時間帯別累計</button>
   </div>
@@ -1819,6 +1943,7 @@ def build_dashboard() -> None:
   <div id="search-results-panel"></div>
   <div id="view-prev-month"  class="view-section"></div>
   <div id="view-this-month"  class="view-section"></div>
+  <div id="view-by-type"     class="view-section"></div>
   <div id="view-by-weekday"  class="view-section"></div>
   <div id="view-by-hour"     class="view-section"></div>
 {sections_html}
@@ -1827,6 +1952,7 @@ def build_dashboard() -> None:
 <script>
 const availableDates = {dates_json};
 const dailyData = {daily_data_json};
+const typeNames = {type_names_json};
 let currentYear  = {latest.year};
 let currentMonth = {latest.month - 1};
 let selectedDate = null;
