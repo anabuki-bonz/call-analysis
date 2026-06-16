@@ -2,7 +2,7 @@
 Chatwork notification script for call center daily analysis.
 
 Usage:
-    python call_center/notify.py [YYYY-MM-DD]
+    python notify.py [YYYY-MM-DD]
 
     Date defaults to today if omitted.
 
@@ -11,7 +11,7 @@ Required (.env or env vars):
     CHATWORK_ADMIN_ROOM_ID  Admin room ID
 
 Optional env vars:
-    REPORTS_DIR  Path to reports folder (default: call_center/reports/)
+    REPORTS_DIR  Path to reports folder (default: reports/)
 """
 
 import json
@@ -142,20 +142,20 @@ def extract_kpi(rdata: dict) -> dict:
         "work_hrs":    work_val,
         "cph":         cph_val,
         "talk_time":   talk_val,
-        "total_day":   _extract_diff_str(diffs.get("total_day", "-")),
-        "total_week":  _extract_diff_str(diffs.get("total_week", "-")),
-        "got_day":     _extract_diff_str(diffs.get("got_day", "-")),
-        "got_week":    _extract_diff_str(diffs.get("got_week", "-")),
-        "missed_day":  _extract_diff_str(diffs.get("missed_day", "-")),
-        "missed_week": _extract_diff_str(diffs.get("missed_week", "-")),
-        "rate_day":    _extract_diff_str(diffs.get("rate_day", "-")),
-        "rate_week":   _extract_diff_str(diffs.get("rate_week", "-")),
-        "work_day":    _extract_diff_str(diffs.get("work_day", "-")),
-        "work_week":   _extract_diff_str(diffs.get("work_week", "-")),
-        "cph_day":     _extract_diff_str(diffs.get("cph_day", "-")),
-        "cph_week":    _extract_diff_str(diffs.get("cph_week", "-")),
-        "talk_day":    _extract_diff_str(diffs.get("talk_day", "-")),
-        "talk_week":   _extract_diff_str(diffs.get("talk_week", "-")),
+        "total_month":  _extract_diff_str(diffs.get("total_month", "-")),
+        "total_week":   _extract_diff_str(diffs.get("total_week", "-")),
+        "got_month":    _extract_diff_str(diffs.get("got_month", "-")),
+        "got_week":     _extract_diff_str(diffs.get("got_week", "-")),
+        "missed_month": _extract_diff_str(diffs.get("missed_month", "-")),
+        "missed_week":  _extract_diff_str(diffs.get("missed_week", "-")),
+        "rate_month":   _extract_diff_str(diffs.get("rate_month", "-")),
+        "rate_week":    _extract_diff_str(diffs.get("rate_week", "-")),
+        "work_month":   _extract_diff_str(diffs.get("work_month", "-")),
+        "work_week":    _extract_diff_str(diffs.get("work_week", "-")),
+        "cph_month":    _extract_diff_str(diffs.get("cph_month", "-")),
+        "cph_week":     _extract_diff_str(diffs.get("cph_week", "-")),
+        "talk_month":   _extract_diff_str(diffs.get("talk_month", "-")),
+        "talk_week":    _extract_diff_str(diffs.get("talk_week", "-")),
     }
 
 
@@ -205,19 +205,20 @@ def build_message(target_date: date, rdata: dict) -> str:
     lines = [
         f"[info][title]📊 コール日次分析 {date_str}（{weekday}）[/title]",
         "【📈 KPIサマリー】",
-        f"着信数　　　：{_rjust_dw(v['total'], 7)}  前日比 {_rjust_dw(v['total_day'], 7)}  前週比 {_rjust_dw(v['total_week'], 7)}",
-        f"応答数　　　：{_rjust_dw(v['got'], 7)}  前日比 {_rjust_dw(v['got_day'], 7)}  前週比 {_rjust_dw(v['got_week'], 7)}",
-        f"未応答数　　：{_rjust_dw(v['missed'], 7)}  前日比 {_rjust_dw(v['missed_day'], 7)}  前週比 {_rjust_dw(v['missed_week'], 7)}",
-        f"応答率　　　：{_rjust_dw(v['rate'], 7)}  前日比 {_rjust_dw(v['rate_day'], 7)}  前週比 {_rjust_dw(v['rate_week'], 7)}  {v['rate_flag']}",
-        f"合計稼働時間：{_rjust_dw(v['work_hrs'], 7)}  前日比 {_rjust_dw(v['work_day'], 7)}  前週比 {_rjust_dw(v['work_week'], 7)}",
-        f"平均CPH　　 ：{_rjust_dw(v['cph'], 7)}  前日比 {_rjust_dw(v['cph_day'], 7)}  前週比 {_rjust_dw(v['cph_week'], 7)}",
-        f"平均通話時間：{_rjust_dw(v['talk_time'], 7)}  前日比 {_rjust_dw(v['talk_day'], 7)}  前週比 {_rjust_dw(v['talk_week'], 7)}",
+        f"着信数　　　：{_rjust_dw(v['total'], 7)}  前月比 {_rjust_dw(v['total_month'], 7)}  前週比 {_rjust_dw(v['total_week'], 7)}",
+        f"応答数　　　：{_rjust_dw(v['got'], 7)}  前月比 {_rjust_dw(v['got_month'], 7)}  前週比 {_rjust_dw(v['got_week'], 7)}",
+        f"未応答数　　：{_rjust_dw(v['missed'], 7)}  前月比 {_rjust_dw(v['missed_month'], 7)}  前週比 {_rjust_dw(v['missed_week'], 7)}",
+        f"応答率　　　：{_rjust_dw(v['rate'], 7)}  前月比 {_rjust_dw(v['rate_month'], 7)}  前週比 {_rjust_dw(v['rate_week'], 7)}  {v['rate_flag']}",
+        f"合計稼働時間：{_rjust_dw(v['work_hrs'], 7)}  前月比 {_rjust_dw(v['work_month'], 7)}  前週比 {_rjust_dw(v['work_week'], 7)}",
+        f"平均CPH　　 ：{_rjust_dw(v['cph'], 7)}  前月比 {_rjust_dw(v['cph_month'], 7)}  前週比 {_rjust_dw(v['cph_week'], 7)}",
+        f"平均通話時間：{_rjust_dw(v['talk_time'], 7)}  前月比 {_rjust_dw(v['talk_month'], 7)}  前週比 {_rjust_dw(v['talk_week'], 7)}",
+        "※ 前月比＝前月同曜日（祝日除く）平均との比較／前週比＝前週同曜日との比較。「－」は比較対象なし",
         "",
         "【🔍 要因分析】",
         *_format_factors(factors),
         "",
         "【🌐 ダッシュボード】",
-        "https://anabuki-bonz.github.io/call-analysis/call_center/reports/dashboard.html",
+        "https://anabuki-bonz.github.io/call-analysis/",
         "[/info]",
     ]
     return "\n".join(lines)

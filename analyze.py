@@ -2,11 +2,11 @@
 Call center daily analysis script.
 
 Usage:
-    python -X utf8 call_center/analyze.py [YYYY-MM-DD]
+    python -X utf8 analyze.py [YYYY-MM-DD]
 
 Output:
-    call_center/reports/YYYY-MM-DD.md
-    call_center/reports/YYYY-MM-DD.html
+    reports/daily/YYYY-MM-DD.html
+    index.html (dashboard)
 
 Note: OP-level call counts are derived from 取得Zoiper / 放棄Zoiper columns.
       Calls where both are NaN cannot be attributed to a specific OP.
@@ -268,6 +268,50 @@ def _diff_str(new_val, old_val, unit: str = "", is_rate: bool = False,
 
 # ---- basic stats for any date (for comparison rows) ------------------
 
+def _prev_month_weekday_avg(
+    cdr: pd.DataFrame, stf: pd.DataFrame,
+    target_date: date, weekday_label: str, in_ext_types: set
+) -> dict | None:
+    """前月の同曜日（祝日除外）の平均stats。weekday_labelが「祝」の場合は祝日同士で平均。"""
+    import calendar as _cal
+    pm_year  = target_date.year if target_date.month > 1 else target_date.year - 1
+    pm_month = target_date.month - 1 if target_date.month > 1 else 12
+    days_in_pm = _cal.monthrange(pm_year, pm_month)[1]
+
+    stats_list: list[dict] = []
+    for day in range(1, days_in_pm + 1):
+        d = date(pm_year, pm_month, day)
+        date_csv = str(d).replace("-", "/")
+        day_in = cdr[
+            (cdr["入電判定"] == True) &
+            (cdr["日付"].astype(str).str.contains(date_csv, regex=False)) &
+            (cdr["内線種別"].isin(in_ext_types))
+        ]
+        if day_in.empty:
+            continue
+        wd = str(day_in["曜日"].iloc[0])
+        if weekday_label == "祝":
+            if wd != "祝":
+                continue
+        else:
+            if wd != weekday_label or wd == "祝":
+                continue
+        s = _day_stats(cdr, stf, d, in_ext_types)
+        if s:
+            stats_list.append(s)
+
+    if not stats_list:
+        return None
+    n = len(stats_list)
+    keys = ["total", "got", "missed", "rate", "work_hrs", "avg_cph", "avg_talk"]
+    avg: dict = {}
+    for k in keys:
+        vals = [s[k] for s in stats_list if s.get(k) is not None]
+        avg[k] = round(sum(vals) / len(vals), 1) if vals else None
+    avg["_n"] = n
+    return avg
+
+
 def _day_stats(cdr: pd.DataFrame, stf: pd.DataFrame,
                d: date, in_ext_types: set) -> dict | None:
     date_csv = str(d).replace("-", "/")
@@ -297,6 +341,59 @@ def _day_stats(cdr: pd.DataFrame, stf: pd.DataFrame,
     return dict(total=total, got=got, missed=missed, rate=rate,
                 ops=ops, work_hrs=work_hrs, avg_cph=avg_cph,
                 op_per=op_per, needed=needed, proc=proc, avg_talk=avg_talk)
+
+
+def _prev_month_weekday_hourly_avg(
+    cdr: pd.DataFrame, target_date: date, weekday_label: str, in_ext_types: set
+) -> dict[int, dict]:
+    """前月の同曜日（祝日除外）の時間帯別平均。weekday_labelが「祝」なら祝同士で平均。"""
+    import calendar as _cal
+    pm_year  = target_date.year if target_date.month > 1 else target_date.year - 1
+    pm_month = target_date.month - 1 if target_date.month > 1 else 12
+    days_in_pm = _cal.monthrange(pm_year, pm_month)[1]
+
+    hourly_lists: dict[int, list] = {h: [] for h in range(24)}
+    for day in range(1, days_in_pm + 1):
+        d = date(pm_year, pm_month, day)
+        date_csv = str(d).replace("-", "/")
+        day_in = cdr[
+            (cdr["入電判定"] == True) &
+            (cdr["日付"].astype(str).str.contains(date_csv, regex=False)) &
+            (cdr["内線種別"].isin(in_ext_types))
+        ]
+        if day_in.empty:
+            continue
+        wd = str(day_in["曜日"].iloc[0])
+        if weekday_label == "祝":
+            if wd != "祝":
+                continue
+        else:
+            if wd != weekday_label or wd == "祝":
+                continue
+        for h in range(24):
+            sub = day_in[day_in["時刻"] == h]
+            if len(sub) > 0:
+                calls = len(sub)
+                ans   = int((sub["入電結果"] == True).sum())
+                hourly_lists[h].append({"total": calls, "got": ans, "missed": calls - ans})
+
+    result: dict[int, dict] = {}
+    for h in range(24):
+        entries = hourly_lists[h]
+        if not entries:
+            result[h] = {"total": None, "got": None, "missed": None, "rate": None}
+        else:
+            n  = len(entries)
+            t  = sum(e["total"]  for e in entries) / n
+            g  = sum(e["got"]    for e in entries) / n
+            mi = sum(e["missed"] for e in entries) / n
+            result[h] = {
+                "total":  round(t,  1),
+                "got":    round(g,  1),
+                "missed": round(mi, 1),
+                "rate":   round(g / t * 100, 1) if t > 0 else None,
+            }
+    return result
 
 
 def _hourly_breakdown(cdr: pd.DataFrame, d: date, in_ext_types: set) -> dict[int, dict]:
@@ -378,6 +475,9 @@ def analyze(target_date: date,
     prev_week_date  = target_date - timedelta(days=7)
     prev_day_hourly  = _hourly_breakdown(cdr, prev_day_date,  in_ext_types)
     prev_week_hourly = _hourly_breakdown(cdr, prev_week_date, in_ext_types)
+    prev_month_hourly = _prev_month_weekday_hourly_avg(
+        cdr, target_date, weekday, in_ext_types
+    )
 
     # --- 時間帯別 ---
     hourly = []
@@ -395,6 +495,8 @@ def analyze(target_date: date,
                            "prev_d_total": pd_s["total"], "prev_w_total":  pw_s["total"],
                            "prev_d_got":   pd_s["got"],   "prev_w_got":    pw_s["got"],
                            "prev_d_missed":pd_s["missed"],"prev_w_missed": pw_s["missed"],
+                           "prev_m_rate":  None, "prev_m_total": None,
+                           "prev_m_got":   None, "prev_m_missed": None,
                            "overloaded": over})
             continue
         calls = len(sub)
@@ -409,6 +511,7 @@ def analyze(target_date: date,
             ans_sub = sub[sub["入電結果"] == True]["通話時間"].dropna()
             if not ans_sub.empty:
                 avg_talk_h = int(round(float(ans_sub.mean())))
+        pm_h = prev_month_hourly[h]
         hourly.append({"時間帯": f"{h}時台", "着信": calls, "応答": ans, "未応答": mis,
                        "応答率": r, "判定": judge, "active_ops": active_cnt,
                        "avg_talk_secs": avg_talk_h,
@@ -416,6 +519,8 @@ def analyze(target_date: date,
                        "prev_d_total": pd_s["total"], "prev_w_total":  pw_s["total"],
                        "prev_d_got":   pd_s["got"],   "prev_w_got":    pw_s["got"],
                        "prev_d_missed":pd_s["missed"],"prev_w_missed": pw_s["missed"],
+                       "prev_m_rate":  pm_h["rate"],  "prev_m_total":  pm_h["total"],
+                       "prev_m_got":   pm_h["got"],   "prev_m_missed": pm_h["missed"],
                        "overloaded": over})
 
     # --- 未応答分類 ---
@@ -535,9 +640,25 @@ def analyze(target_date: date,
     else:
         op_cph_best5 = op_cph_worst5 = op_rate_best5 = op_rate_worst5 = pd.DataFrame()
 
-    # --- 前日・前週比（集計値） ---
+    # --- 前週比・前月同曜日平均比 ---
     prev_day_s  = _day_stats(cdr, stf, prev_day_date,  in_ext_types)
     prev_week_s = _day_stats(cdr, stf, prev_week_date, in_ext_types)
+
+    # 前週が祝日かどうか
+    pw_day_in = cdr[
+        (cdr["入電判定"] == True) &
+        (cdr["日付"].astype(str).str.contains(
+            str(prev_week_date).replace("-", "/"), regex=False)) &
+        (cdr["内線種別"].isin(in_ext_types))
+    ]
+    prev_week_is_holiday = (
+        not pw_day_in.empty and str(pw_day_in["曜日"].iloc[0]) == "祝"
+    )
+
+    # 前月同曜日平均（祝日除外）
+    prev_month_avg_s = _prev_month_weekday_avg(
+        cdr, stf, target_date, weekday, in_ext_types
+    )
 
     # --- 通話時間ランキング ---
     if "通話時間" in in_df.columns and not by_ext.empty:
@@ -576,6 +697,8 @@ def analyze(target_date: date,
         total_work_hrs=total_work_hrs, avg_cph=avg_cph,
         avg_talk_secs=avg_talk_secs,
         prev_day_s=prev_day_s, prev_week_s=prev_week_s,
+        prev_month_avg_s=prev_month_avg_s,
+        prev_week_is_holiday=prev_week_is_holiday,
         hourly=hourly,
         miss_counts=miss_counts,
         ext_best5=ext_best5, ext_worst5=ext_worst5, ext_by_volume=ext_by_volume,
@@ -645,16 +768,16 @@ hr{border:1px solid #ddd;margin:1.5em 0}
 
 def _compute_factors(d: dict) -> dict[str, list[str]]:
     factors: dict[str, list[str]] = {"需要": [], "供給": [], "生産性": []}
-    ps    = d["prev_day_s"]
+    pm    = d.get("prev_month_avg_s")
     pw    = d["prev_week_s"]
     total = d["total"]
 
     # --- 需要要因 ---
-    if ps and (ps.get("total") or 0) > 0:
-        ratio = (total - ps["total"]) / ps["total"]
+    if pm and (pm.get("total") or 0) > 0:
+        ratio = (total - pm["total"]) / pm["total"]
         if abs(ratio) >= 0.10:
             factors["需要"].append(
-                f"着信数が前日比 {round(ratio * 100, 1):+.1f}%（{'増加' if ratio > 0 else '減少'}）")
+                f"着信数が前月同曜日平均比 {round(ratio * 100, 1):+.1f}%（{'増加' if ratio > 0 else '減少'}）")
     if pw and (pw.get("total") or 0) > 0:
         ratio = (total - pw["total"]) / pw["total"]
         if abs(ratio) >= 0.10:
@@ -699,20 +822,20 @@ def _compute_factors(d: dict) -> dict[str, list[str]]:
             factors["生産性"].append(f"平均CPHが低い（{cph}件/h・目安8以上）")
         elif cph >= 12:
             factors["生産性"].append(f"平均CPHが高い（{cph}件/h）")
-        if ps and (ps.get("avg_cph") or 0) > 0:
-            ratio = (cph - ps["avg_cph"]) / ps["avg_cph"]
+        if pm and (pm.get("avg_cph") or 0) > 0:
+            ratio = (cph - pm["avg_cph"]) / pm["avg_cph"]
             if abs(ratio) >= 0.20:
                 factors["生産性"].append(
-                    f"CPHが前日比 {round(ratio * 100, 1):+.1f}%（{'上昇' if ratio > 0 else '低下'}）")
+                    f"CPHが前月同曜日平均比 {round(ratio * 100, 1):+.1f}%（{'上昇' if ratio > 0 else '低下'}）")
     secs = d.get("avg_talk_secs")
     if secs is not None:
         if secs > 300:
             factors["生産性"].append(f"平均通話時間が長い（{fmt_seconds(secs)}）")
-        if ps and (ps.get("avg_talk") or 0) > 0:
-            ratio = (secs - ps["avg_talk"]) / ps["avg_talk"]
+        if pm and (pm.get("avg_talk") or 0) > 0:
+            ratio = (secs - pm["avg_talk"]) / pm["avg_talk"]
             if abs(ratio) >= 0.20:
                 factors["生産性"].append(
-                    f"平均通話時間が前日比 {round(ratio * 100, 1):+.1f}%（{'増加' if ratio > 0 else '減少'}）")
+                    f"平均通話時間が前月同曜日平均比 {round(ratio * 100, 1):+.1f}%（{'増加' if ratio > 0 else '減少'}）")
 
     return factors
 
@@ -756,22 +879,52 @@ def _html_table(headers: list[str], rows_html: str) -> str:
     return f"<table><tr>{ths}</tr>{rows_html}</table>"
 
 
-def build_html(d: dict) -> str:
-    ps  = d["prev_day_s"]
-    pw  = d["prev_week_s"]
+_TOOLTIP_WEEK_HOLIDAY  = "前週が祝日のため参考値外"
+_TOOLTIP_NO_PREV_MONTH = "前月に同曜日のデータなし"
 
-    def dcell(cur, prev_d_key: str, unit: str = "件", is_rate: bool = False,
+
+def build_html(d: dict) -> str:
+    pm  = d.get("prev_month_avg_s")
+    pw  = d["prev_week_s"]
+    pw_holiday = d.get("prev_week_is_holiday", False)
+
+    def _tooltip_cell(text: str, tip: str) -> str:
+        return (f'<span title="{tip}" style="cursor:help;color:#aaa;'
+                f'border-bottom:1px dashed #aaa">{text}</span>')
+
+    def dcell_plain(cur, pm_key: str, unit: str = "件", is_rate: bool = False,
+                    use_float: bool = False) -> tuple[str, str, bool, bool]:
+        """Plain-text comparison. Returns (month, week, month_missing, week_holiday).
+        Used for both the HTML table (wrapped by dcell) and the JSON for notify.py."""
+        # 前月同曜日平均比
+        pm_val = pm[pm_key] if (pm and pm_key in pm and pm[pm_key] is not None) else None
+        month_missing = pm_val is None
+        month_s = "－" if month_missing else _diff_str(cur, pm_val, unit, is_rate, use_float)
+
+        # 前週同曜日比（前週が祝日なら参考値外）
+        if pw_holiday:
+            week_s = "－"
+        else:
+            pw_val = pw[pm_key] if (pw and pm_key in pw) else None
+            week_s = _diff_str(cur, pw_val, unit, is_rate, use_float)
+
+        return (month_s, week_s, month_missing, pw_holiday)
+
+    def dcell(cur, pm_key: str, unit: str = "件", is_rate: bool = False,
               use_float: bool = False) -> tuple[str, str]:
-        pd_val = ps[prev_d_key] if (ps and prev_d_key in ps) else None
-        pw_val = pw[prev_d_key] if (pw and prev_d_key in pw) else None
-        return (_diff_str(cur, pd_val, unit, is_rate, use_float),
-                _diff_str(cur, pw_val, unit, is_rate, use_float))
+        month_s, week_s, month_missing, week_holiday = dcell_plain(
+            cur, pm_key, unit, is_rate, use_float)
+        if month_missing:
+            month_s = _tooltip_cell(month_s, _TOOLTIP_NO_PREV_MONTH)
+        if week_holiday:
+            week_s = _tooltip_cell(week_s, _TOOLTIP_WEEK_HOLIDAY)
+        return (month_s, week_s)
 
     def srow(label: str, cur_disp: str, cur_raw, key: str, unit: str = "件",
              is_rate: bool = False, use_float: bool = False) -> str:
-        day_s, week_s = dcell(cur_raw, key, unit, is_rate, use_float)
+        month_s, week_s = dcell(cur_raw, key, unit, is_rate, use_float)
         return (f'<tr><td style="text-align:left">{label}</td><td><strong>{cur_disp}</strong></td>'
-                f"<td>{day_s}</td><td>{week_s}</td></tr>")
+                f"<td>{month_s}</td><td>{week_s}</td></tr>")
 
     cph_disp  = str(d["avg_cph"]) if d["avg_cph"] is not None else "-"
     talk_disp = fmt_seconds(d["avg_talk_secs"])
@@ -857,33 +1010,41 @@ def build_html(d: dict) -> str:
             f'{inner}</table></td></tr>\n'
         )
 
-    def _h_tot_diff(cur, key: str, unit: str = "件", is_rate: bool = False) -> tuple[str, str]:
-        pd_v = ps[key] if (ps and key in ps) else None
-        pw_v = pw[key] if (pw and key in pw) else None
-        return (f"<td>{_diff_str(cur, pd_v, unit, is_rate)}</td>",
-                f"<td>{_diff_str(cur, pw_v, unit, is_rate)}</td>")
+    ps = d.get("prev_day_s")  # hourly table still uses prev_day for row-level detail
 
-    tot_d_total,  tot_w_total  = _h_tot_diff(d["total"],  "total")
-    tot_d_got,    tot_w_got    = _h_tot_diff(d["got"],    "got")
-    tot_d_missed, tot_w_missed = _h_tot_diff(d["missed"], "missed")
-    tot_d_rate,   tot_w_rate   = _h_tot_diff(d["rate"],   "rate", "%", True)
+    def _h_tot_diff(cur, pm_key: str, pw_key: str, unit: str = "件", is_rate: bool = False) -> tuple[str, str]:
+        pm_v = pm[pm_key] if (pm and pm_key in pm and pm[pm_key] is not None) else None
+        pw_v = pw[pw_key] if (pw and pw_key in pw) else None
+        m_cell = _diff_str(cur, pm_v, unit, is_rate) if pm_v is not None else (
+            f'<span title="{_TOOLTIP_NO_PREV_MONTH}" style="cursor:help;color:#aaa;border-bottom:1px dashed #aaa">－</span>'
+        )
+        if pw_holiday:
+            w_cell = f'<span title="{_TOOLTIP_WEEK_HOLIDAY}" style="cursor:help;color:#aaa;border-bottom:1px dashed #aaa">－</span>'
+        else:
+            w_cell = _diff_str(cur, pw_v, unit, is_rate)
+        return (f"<td>{m_cell}</td>", f"<td>{w_cell}</td>")
+
+    tot_m_total,  tot_w_total  = _h_tot_diff(d["total"],  "total",    "total",    "件")
+    tot_m_got,    tot_w_got    = _h_tot_diff(d["got"],    "got",      "got",      "件")
+    tot_m_missed, tot_w_missed = _h_tot_diff(d["missed"], "missed",   "missed",   "件")
+    tot_m_rate,   tot_w_rate   = _h_tot_diff(d["rate"],   "rate",     "rate",     "%", True)
 
     if any(r["着信"] > 0 for r in d["hourly"]):
         hourly_table_html = (
             '<div class="hourly-wrap"><table>'
             f'<tr><th></th>{h_headers}</tr>'
-            + _hrow("着信数",    f"<td>{d['total']}</td>"   + _tds([d["hourly"][h]["着信"]   for h in all_hours]))
-            + _hrow("　前日比",  tot_d_total  + _tds([_diff_str(d["hourly"][h]["着信"],   d["hourly"][h]["prev_d_total"],  "件") for h in all_hours]), "comp-row")
-            + _hrow("　前週比",  tot_w_total  + _tds([_diff_str(d["hourly"][h]["着信"],   d["hourly"][h]["prev_w_total"],  "件") for h in all_hours]), "comp-row")
-            + _hrow("応答数",    f"<td>{d['got']}</td>"     + _tds([d["hourly"][h]["応答"]   for h in all_hours]))
-            + _hrow("　前日比",  tot_d_got    + _tds([_diff_str(d["hourly"][h]["応答"],   d["hourly"][h]["prev_d_got"],    "件") for h in all_hours]), "comp-row")
-            + _hrow("　前週比",  tot_w_got    + _tds([_diff_str(d["hourly"][h]["応答"],   d["hourly"][h]["prev_w_got"],    "件") for h in all_hours]), "comp-row")
-            + _hrow("未応答数",  f"<td>{d['missed']}</td>"  + _tds([d["hourly"][h]["未応答"]  for h in all_hours]))
-            + _hrow("　前日比",  tot_d_missed + _tds([_diff_str(d["hourly"][h]["未応答"], d["hourly"][h]["prev_d_missed"], "件") for h in all_hours]), "comp-row")
-            + _hrow("　前週比",  tot_w_missed + _tds([_diff_str(d["hourly"][h]["未応答"], d["hourly"][h]["prev_w_missed"], "件") for h in all_hours]), "comp-row")
-            + _hrow("応答率",    _rate_td(d["rate"]) + "".join(_rate_td(d["hourly"][h]["応答率"]) for h in all_hours))
-            + _hrow("　前日比",  tot_d_rate   + _tds([_diff_str(d["hourly"][h]["応答率"], d["hourly"][h]["prev_d_rate"],   "%", is_rate=True) for h in all_hours]), "comp-row")
-            + _hrow("　前週比",  tot_w_rate   + _tds([_diff_str(d["hourly"][h]["応答率"], d["hourly"][h]["prev_w_rate"],   "%", is_rate=True) for h in all_hours]), "comp-row")
+            + _hrow("着信数",      f"<td>{d['total']}</td>"   + _tds([d["hourly"][h]["着信"]   for h in all_hours]))
+            + _hrow("　前月平均比", tot_m_total  + _tds([_diff_str(d["hourly"][h]["着信"],   d["hourly"][h]["prev_m_total"],  "件") for h in all_hours]), "comp-row")
+            + _hrow("　前週比",    tot_w_total  + _tds([_diff_str(d["hourly"][h]["着信"],   d["hourly"][h]["prev_w_total"],  "件") for h in all_hours]), "comp-row")
+            + _hrow("応答数",      f"<td>{d['got']}</td>"     + _tds([d["hourly"][h]["応答"]   for h in all_hours]))
+            + _hrow("　前月平均比", tot_m_got    + _tds([_diff_str(d["hourly"][h]["応答"],   d["hourly"][h]["prev_m_got"],    "件") for h in all_hours]), "comp-row")
+            + _hrow("　前週比",    tot_w_got    + _tds([_diff_str(d["hourly"][h]["応答"],   d["hourly"][h]["prev_w_got"],    "件") for h in all_hours]), "comp-row")
+            + _hrow("未応答数",    f"<td>{d['missed']}</td>"  + _tds([d["hourly"][h]["未応答"]  for h in all_hours]))
+            + _hrow("　前月平均比", tot_m_missed + _tds([_diff_str(d["hourly"][h]["未応答"], d["hourly"][h]["prev_m_missed"], "件") for h in all_hours]), "comp-row")
+            + _hrow("　前週比",    tot_w_missed + _tds([_diff_str(d["hourly"][h]["未応答"], d["hourly"][h]["prev_w_missed"], "件") for h in all_hours]), "comp-row")
+            + _hrow("応答率",      _rate_td(d["rate"]) + "".join(_rate_td(d["hourly"][h]["応答率"]) for h in all_hours))
+            + _hrow("　前月平均比", tot_m_rate   + _tds([_diff_str(d["hourly"][h]["応答率"], d["hourly"][h]["prev_m_rate"],   "%", is_rate=True) for h in all_hours]), "comp-row")
+            + _hrow("　前週比",    tot_w_rate   + _tds([_diff_str(d["hourly"][h]["応答率"], d["hourly"][h]["prev_w_rate"],   "%", is_rate=True) for h in all_hours]), "comp-row")
             + _hrow("人員数",    "<td>-</td>" + _tds([d["hourly"][h]["active_ops"] for h in all_hours]))
             + _hrow("過不足",    "<td>-</td>" + "".join(_overage_td(h) for h in all_hours))
             + _hrow("平均通話時間", f"<td>{fmt_seconds(d['avg_talk_secs'])}</td>" + "".join(_talk_td_h(h) for h in all_hours))
@@ -1049,13 +1210,14 @@ def build_html(d: dict) -> str:
     else:
         ab_ranking_html = ""
 
-    total_day_d,  total_week_d  = dcell(d["total"],          "total",    "件")
-    got_day_d,    got_week_d    = dcell(d["got"],             "got",      "件")
-    missed_day_d, missed_week_d = dcell(d["missed"],          "missed",   "件")
-    rate_day_d,   rate_week_d   = dcell(d["rate"],            "rate",     "%",  True)
-    work_day_d,   work_week_d   = dcell(d["total_work_hrs"],  "work_hrs", "h",  False, True)
-    cph_day_d,    cph_week_d    = dcell(cph_raw,              "avg_cph",  "",   False, True)
-    talk_day_d,   talk_week_d   = dcell(talk_raw,             "avg_talk", "秒")
+    # 通知用：プレーンテキスト（HTMLツールチップを含めない）。月=前月同曜日平均比, 週=前週同曜日比
+    total_month_d,  total_week_d  = dcell_plain(d["total"],         "total",    "件")[:2]
+    got_month_d,    got_week_d    = dcell_plain(d["got"],            "got",      "件")[:2]
+    missed_month_d, missed_week_d = dcell_plain(d["missed"],         "missed",   "件")[:2]
+    rate_month_d,   rate_week_d   = dcell_plain(d["rate"],           "rate",     "%",  True)[:2]
+    work_month_d,   work_week_d   = dcell_plain(d["total_work_hrs"], "work_hrs", "h",  False, True)[:2]
+    cph_month_d,    cph_week_d    = dcell_plain(cph_raw,             "avg_cph",  "",   False, True)[:2]
+    talk_month_d,   talk_week_d   = dcell_plain(talk_raw,            "avg_talk", "秒")[:2]
 
     def _ext_row_dict(row) -> dict:
         return {
@@ -1092,13 +1254,13 @@ def build_html(d: dict) -> str:
         "avg_cph": d["avg_cph"],
         "avg_talk_secs": d["avg_talk_secs"],
         "kpi_diffs": {
-            "total_day":  total_day_d,  "total_week":  total_week_d,
-            "got_day":    got_day_d,    "got_week":    got_week_d,
-            "missed_day": missed_day_d, "missed_week": missed_week_d,
-            "rate_day":   rate_day_d,   "rate_week":   rate_week_d,
-            "work_day":   work_day_d,   "work_week":   work_week_d,
-            "cph_day":    cph_day_d,    "cph_week":    cph_week_d,
-            "talk_day":   talk_day_d,   "talk_week":   talk_week_d,
+            "total_month":  total_month_d,  "total_week":  total_week_d,
+            "got_month":    got_month_d,    "got_week":    got_week_d,
+            "missed_month": missed_month_d, "missed_week": missed_week_d,
+            "rate_month":   rate_month_d,   "rate_week":   rate_week_d,
+            "work_month":   work_month_d,   "work_week":   work_week_d,
+            "cph_month":    cph_month_d,    "cph_week":    cph_week_d,
+            "talk_month":   talk_month_d,   "talk_week":   talk_week_d,
         },
         "ext_worst5": [
             _ext_row_dict(row)
@@ -1140,7 +1302,7 @@ def build_html(d: dict) -> str:
 <h1>{d['date_csv']}（{d['weekday']}）</h1>
 <h2>全体サマリー</h2>
 <div class="side-by-side">
-<div>{_html_table(["KPI", "実績", "前日比", "前週同曜日比"], summary_rows)}</div>
+<div>{_html_table(["KPI", "実績", "前月同曜日平均比", "前週同曜日比"], summary_rows)}</div>
 <div><h3>未応答分類（計{d['missed']}件）</h3>
 {_html_table(["分類", "件数", "割合"], miss_rows)}</div>
 </div>
@@ -1466,7 +1628,6 @@ function renderViewContent(id, el) {
   if (id === 'prev-month' || id === 'this-month') renderMonthView(el, id === 'this-month');
   else if (id === 'by-weekday') renderWeekdayView(el);
   else if (id === 'by-hour')    renderHourView(el);
-  else if (id === 'by-type')    renderTypeView(el);
 }
 function extFilterLabel() {
   if (extFilterExt)  return '内線 ' + extFilterExt;
@@ -1520,32 +1681,22 @@ function renderMonthView(el, isThis) {
     '<tr><td style="text-align:left">平均CPH</td><td>-</td><td class="' + cc + '">' + (avgCph != null ? avgCph : '-') + '</td></tr>' +
     '<tr><td style="text-align:left">平均通話時間</td><td>-</td><td>' + fmtSecs(avgTalk) + '</td></tr>') +
     '</table>';
-  var wDays = ['月','火','水','木','金','土','日'];
-  var wBuckets = {};
-  wDays.forEach(function(d) { wBuckets[d] = []; });
-  rows.forEach(function(r) { if (r.weekday && wBuckets[r.weekday] !== undefined) wBuckets[r.weekday].push(r); });
-  html += '<h3>曜日別集計</h3><table>' +
-    '<tr><th>曜日</th><th>日数</th><th>着信合計</th><th>平均着信</th><th>未応答合計</th><th>平均応答率</th><th>平均CPH</th></tr>';
-  wDays.forEach(function(day) {
-    var rs = wBuckets[day];
-    if (!rs.length) {
-      html += '<tr><td>' + day + '</td><td>0</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>';
-      return;
-    }
-    var n = rs.length;
-    var wT = rs.reduce(function(s,r){return s+r.total;},0);
-    var wG = rs.reduce(function(s,r){return s+r.got;},0);
-    var wM = rs.reduce(function(s,r){return s+r.missed;},0);
-    var wRate = wT > 0 ? Math.round(wG/wT*1000)/10 : null;
-    var wCArr = rs.filter(function(r){return r.avg_cph != null;});
-    var wCph = wCArr.length ? Math.round(wCArr.reduce(function(s,r){return s+r.avg_cph;},0)/wCArr.length*10)/10 : null;
-    html += '<tr><td>' + day + '</td><td>' + n + '</td><td>' + wT + '</td><td>' + Math.round(wT/n*10)/10 + '</td><td>' + wM + '</td>' +
-      '<td class="' + rateCls(wRate) + '">' + (wRate != null ? wRate + '%' : '-') + '</td>' +
-      '<td class="' + cphCls(wCph)  + '">' + (wCph  != null ? wCph  : '-') + '</td></tr>';
+  // 日別詳細
+  var dailyHtml = '<h3>日別詳細</h3><table>' +
+    '<tr><th>日付</th><th>曜日</th><th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>稼働時間</th><th>CPH</th></tr>';
+  rows.forEach(function(r) {
+    var rc3 = rateCls(r.rate), cc3 = cphCls(r.avg_cph);
+    dailyHtml += '<tr><td>' + r.date + '</td><td>' + (r.weekday || '') + '</td>' +
+      '<td>' + r.total + '</td><td>' + r.got + '</td><td>' + r.missed + '</td>' +
+      '<td class="' + rc3 + '">' + (r.rate != null ? r.rate + '%' : '-') + '</td>' +
+      '<td>' + (r.work_hrs != null ? r.work_hrs.toFixed(1) + 'h' : '-') + '</td>' +
+      '<td class="' + cc3 + '">' + (r.avg_cph != null ? r.avg_cph : '-') + '</td></tr>';
   });
-  html += '</table>';
-  html += '<h3>時間帯別累計</h3><table>' +
-    '<tr><th>時間帯</th><th>着信合計</th><th>平均着信</th><th>応答合計</th><th>未応答合計</th><th>応答率</th><th>平均人員</th><th>平均通話時間</th></tr>';
+  dailyHtml += '</table>';
+
+  // 時間帯別累計
+  var hourlyHtml = '<h3>時間帯別累計</h3><table>' +
+    '<tr><th>時間帯</th><th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>平均人員</th></tr>';
   for (var h = 0; h < 24; h++) {
     var hT=0, hG=0, hM=0, hOps=0, hTalkS=0, hTalkN=0, hDays=0;
     rows.forEach(function(r) {
@@ -1556,25 +1707,43 @@ function renderMonthView(el, isThis) {
       if ((hh.total||0) > 0) hDays++;
     });
     var hRate = hT > 0 ? Math.round(hG/hT*1000)/10 : null;
-    html += '<tr><td>' + h + '時台</td><td>' + hT + '</td>' +
-      '<td>' + (hDays > 0 ? Math.round(hT/hDays*10)/10 : '-') + '</td>' +
+    hourlyHtml += '<tr><td>' + h + '時台</td><td>' + hT + '</td>' +
       '<td>' + hG + '</td><td>' + hM + '</td>' +
       '<td class="' + rateCls(hRate) + '">' + (hRate != null ? hRate + '%' : '-') + '</td>' +
-      '<td>' + Math.round(hOps/rows.length*10)/10 + '</td>' +
-      '<td>' + fmtSecs(hTalkN > 0 ? Math.round(hTalkS/hTalkN) : null) + '</td></tr>';
+      '<td>' + Math.round(hOps/rows.length*10)/10 + '</td></tr>';
   }
-  html += '</table>';
-  html += '<h3>日別詳細</h3><table>' +
-    '<tr><th>日付</th><th>曜日</th><th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>稼働時間</th><th>CPH</th></tr>';
-  rows.forEach(function(r) {
-    var rc3 = rateCls(r.rate), cc3 = cphCls(r.avg_cph);
-    html += '<tr><td>' + r.date + '</td><td>' + (r.weekday || '') + '</td>' +
-      '<td>' + r.total + '</td><td>' + r.got + '</td><td>' + r.missed + '</td>' +
-      '<td class="' + rc3 + '">' + (r.rate != null ? r.rate + '%' : '-') + '</td>' +
-      '<td>' + (r.work_hrs != null ? r.work_hrs.toFixed(1) + 'h' : '-') + '</td>' +
-      '<td class="' + cc3 + '">' + (r.avg_cph != null ? r.avg_cph : '-') + '</td></tr>';
+  hourlyHtml += '</table>';
+
+  // 曜日別集計
+  var wDays = ['月','火','水','木','金','土','日','祝'];
+  var wBuckets = {};
+  wDays.forEach(function(d) { wBuckets[d] = []; });
+  rows.forEach(function(r) { if (r.weekday && wBuckets[r.weekday] !== undefined) wBuckets[r.weekday].push(r); });
+  var weekdayHtml = '<h3>曜日別集計</h3><table>' +
+    '<tr><th>曜日</th><th>日数</th><th>着信計</th><th>平均着信</th><th>未応答計</th><th>応答率</th><th>平均CPH</th></tr>';
+  wDays.forEach(function(day) {
+    var rs = wBuckets[day];
+    if (!rs.length) {
+      weekdayHtml += '<tr><td>' + day + '</td><td>0</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>';
+      return;
+    }
+    var n = rs.length;
+    var wT = rs.reduce(function(s,r){return s+r.total;},0);
+    var wG = rs.reduce(function(s,r){return s+r.got;},0);
+    var wM = rs.reduce(function(s,r){return s+r.missed;},0);
+    var wRate = wT > 0 ? Math.round(wG/wT*1000)/10 : null;
+    var wCArr = rs.filter(function(r){return r.avg_cph != null;});
+    var wCph = wCArr.length ? Math.round(wCArr.reduce(function(s,r){return s+r.avg_cph;},0)/wCArr.length*10)/10 : null;
+    weekdayHtml += '<tr><td>' + day + '</td><td>' + n + '</td><td>' + wT + '</td><td>' + Math.round(wT/n*10)/10 + '</td><td>' + wM + '</td>' +
+      '<td class="' + rateCls(wRate) + '">' + (wRate != null ? wRate + '%' : '-') + '</td>' +
+      '<td class="' + cphCls(wCph)  + '">' + (wCph  != null ? wCph  : '-') + '</td></tr>';
   });
-  html += '</table>';
+  weekdayHtml += '</table>';
+
+  html += '<div style="display:flex;gap:2em;align-items:flex-start;flex-wrap:wrap">' +
+    '<div style="flex:0 0 auto">' + dailyHtml + '</div>' +
+    '<div style="flex:1 1 auto;min-width:280px">' + hourlyHtml + weekdayHtml + '</div>' +
+    '</div>';
   el.innerHTML = html;
 }
 function renderWeekdayView(el) {
@@ -1585,7 +1754,7 @@ function renderWeekdayView(el) {
   }
   var allDates = rows.map(function(r) { return r.date; }).sort();
   var period = allDates[0] + ' 〜 ' + allDates[allDates.length - 1];
-  var days = ['月','火','水','木','金','土','日'];
+  var days = ['月','火','水','木','金','土','日','祝'];
   var buckets = {};
   days.forEach(function(d) { buckets[d] = []; });
   rows.forEach(function(r) { if (r.weekday && buckets[r.weekday] !== undefined) buckets[r.weekday].push(r); });
@@ -1687,106 +1856,6 @@ function renderHourView(el) {
   html += '</table>';
   el.innerHTML = html;
 }
-function renderTypeView(el) {
-  var rows = getViewData();
-  rows = rows.slice().sort(function(a,b){return a.date.localeCompare(b.date);});
-  if (!rows.length) {
-    el.innerHTML = '<h2>種別別一覧</h2><p style="color:#aaa">データなし</p>';
-    return;
-  }
-  var allDates = rows.map(function(r){return r.date;});
-  var period = allDates[0] + ' 〜 ' + allDates[allDates.length-1];
-  var fl = extFilterLabel();
-  var titleSuffix = fl ? ' <span style="font-size:0.75em;background:#e8f0fe;color:#1a73e8;border-radius:3px;padding:2px 6px">'+fl+'</span>' : '';
-  var html = '<h2>種別別一覧'+titleSuffix+'</h2><p style="color:#777;font-size:0.9em">対象期間: '+period+'（'+rows.length+'日）</p>';
-
-  // Collect per-type per-day aggregates
-  var typeSet = {};
-  rows.forEach(function(day) {
-    (day.ext_daily || []).forEach(function(e) {
-      if (extFilterExt && e.ext !== extFilterExt) return;
-      if (extFilterType && e.type !== extFilterType) return;
-      if (!typeSet[e.type]) typeSet[e.type] = true;
-    });
-  });
-  var types = Object.keys(typeSet).sort(function(a,b){return Number(a)-Number(b)||a.localeCompare(b);});
-  if (!types.length) {
-    el.innerHTML = '<h2>種別別一覧</h2><p style="color:#aaa">絞り込み条件に一致するデータなし</p>';
-    return;
-  }
-
-  // Build day-level totals per type
-  function aggForDay(day, typeKey) {
-    var T=0, G=0;
-    (day.ext_daily || []).forEach(function(e) {
-      if (extFilterExt && e.ext !== extFilterExt) return;
-      if (typeKey !== null && e.type !== typeKey) return;
-      if (extFilterType && e.type !== extFilterType) return;
-      T += e.total; G += e.got;
-    });
-    return {total:T, got:G, missed:T-G, rate: T>0 ? Math.round(G/T*1000)/10 : null};
-  }
-
-  // Column headers: 合計 + each day
-  var headerRow = '<tr style="position:sticky;top:0;background:#f0f0f0;z-index:2">'
-    + '<th style="text-align:left;min-width:50px">種別</th>'
-    + '<th style="text-align:left;min-width:80px">種別名</th>'
-    + '<th style="text-align:left;min-width:60px">項目</th>'
-    + '<th style="min-width:60px">合計</th>';
-  allDates.forEach(function(d) {
-    var dayObj = rows.find(function(r){return r.date===d;});
-    var label = d.slice(5).replace('-','/') + (dayObj ? '('+dayObj.weekday+')' : '');
-    headerRow += '<th style="min-width:55px">'+label+'</th>';
-  });
-  headerRow += '</tr>';
-
-  // Build rows per group (合計 + each type)
-  function buildGroupRows(typeKey, typeName, showType) {
-    // Compute cumulative totals
-    var cumT=0, cumG=0;
-    rows.forEach(function(day){ var a=aggForDay(day,typeKey); cumT+=a.total; cumG+=a.got; });
-    var cumRate = cumT>0 ? Math.round(cumG/cumT*1000)/10 : null;
-    var rc0 = rateCls(cumRate);
-    var typeLabel = showType ? (typeKey !== null ? typeKey : '合計') : '';
-    var nameLabel = showType ? typeName : '';
-    var bg = typeKey === null ? 'background:#f8f8f8;font-weight:bold' : '';
-
-    var r1 = '<tr style="'+bg+'">'
-      + '<td rowspan="3" style="text-align:center;vertical-align:middle;font-weight:bold">'+typeLabel+'</td>'
-      + '<td rowspan="3" style="text-align:left;vertical-align:middle">'+nameLabel+'</td>'
-      + '<td style="text-align:left">着信数</td>'
-      + '<td style="text-align:right">'+cumT+'</td>';
-    var r2 = '<tr style="'+bg+'"><td style="text-align:left">取得数</td><td style="text-align:right">'+cumG+'</td>';
-    var r3 = '<tr style="'+bg+'"><td style="text-align:left">応答率</td>'
-      + '<td class="'+rc0+'" style="text-align:right">'+(cumRate!=null?cumRate+'%':'-')+'</td>';
-    allDates.forEach(function(d) {
-      var day = rows.find(function(r){return r.date===d;});
-      if (!day) { r1+='<td>-</td>'; r2+='<td>-</td>'; r3+='<td>-</td>'; return; }
-      var a = aggForDay(day, typeKey);
-      var rc = rateCls(a.rate);
-      r1 += '<td style="text-align:right">'+(a.total||'-')+'</td>';
-      r2 += '<td style="text-align:right">'+(a.got||'-')+'</td>';
-      r3 += '<td class="'+rc+'" style="text-align:right">'+(a.rate!=null?a.rate+'%':'-')+'</td>';
-    });
-    r1+='</tr>'; r2+='</tr>'; r3+='</tr>';
-    return r1+r2+r3;
-  }
-
-  html += '<div style="overflow-x:auto"><table style="border-collapse:collapse;min-width:max-content">';
-  html += headerRow;
-
-  // 合計行（絞り込みなし or 絞り込み適用済み合計）
-  html += buildGroupRows(null, '', true);
-
-  // 種別ごとの行
-  types.forEach(function(t) {
-    var name = (typeof typeNames !== 'undefined' && typeNames[t]) ? typeNames[t] : '';
-    html += buildGroupRows(t, name, true);
-  });
-
-  html += '</table></div>';
-  el.innerHTML = html;
-}
 """
 
 
@@ -1815,7 +1884,10 @@ def _scope_report_html(body_html: str, dk: str) -> str:
 
 def build_dashboard() -> None:
     today  = date.today()
-    cutoff = today - timedelta(days=60)
+    _cm = today.month - 2
+    _cy = today.year + (_cm - 1) // 12
+    _cm = (_cm - 1) % 12 + 1
+    cutoff = date(_cy, _cm, 1)
 
     reports: list[tuple[date, Path]] = []
     for p in sorted(DAILY_DIR.glob("*.html")):
@@ -1904,7 +1976,6 @@ def build_dashboard() -> None:
     <div class="nav-label">集計ビュー</div>
     <button class="nav-btn" data-view="prev-month"  onclick="showView('prev-month')">📅 前月累計</button>
     <button class="nav-btn" data-view="this-month"  onclick="showView('this-month')">📊 当月累計</button>
-    <button class="nav-btn" data-view="by-type"     onclick="showView('by-type')">📋 種別別一覧</button>
     <button class="nav-btn" data-view="by-weekday"  onclick="showView('by-weekday')">📆 曜日別累計</button>
     <button class="nav-btn" data-view="by-hour"     onclick="showView('by-hour')">⏰ 時間帯別累計</button>
   </div>
@@ -1943,7 +2014,6 @@ def build_dashboard() -> None:
   <div id="search-results-panel"></div>
   <div id="view-prev-month"  class="view-section"></div>
   <div id="view-this-month"  class="view-section"></div>
-  <div id="view-by-type"     class="view-section"></div>
   <div id="view-by-weekday"  class="view-section"></div>
   <div id="view-by-hour"     class="view-section"></div>
 {sections_html}
@@ -2124,7 +2194,7 @@ renderCalendar();
 </body>
 </html>"""
 
-    dash_path = REPORTS_DIR / "dashboard.html"
+    dash_path = BASE_DIR / "index.html"
     dash_path.write_text(dashboard_html, encoding="utf-8")
     print(f"✅ ダッシュボード更新完了: {dash_path}")
 

@@ -2,12 +2,12 @@
 Google Sheets → CSV export script.
 
 Usage:
-    python -X utf8 call_center/fetch_sheets.py
+    python -X utf8 fetch_sheets.py
 
 Exports:
-    call_center/data/cdr.csv
-    call_center/data/staffing.csv
-    call_center/data/ring_config.csv
+    data/cdr.csv
+    data/staffing.csv
+    data/ring_config.csv
 """
 
 import sys

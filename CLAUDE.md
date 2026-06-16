@@ -39,13 +39,13 @@
 
 ```bash
 cd "G:\マイドライブ\Claude Code\call-analysis"
-python -X utf8 call_center/fetch_sheets.py
+python -X utf8 fetch_sheets.py
 ```
 
 ### STEP2: 分析実行
 
 ```bash
-python -X utf8 call_center/analyze.py YYYY-MM-DD
+python -X utf8 analyze.py YYYY-MM-DD
 ```
 
 ### STEP3: ダッシュボード公開
@@ -64,7 +64,7 @@ git push
 
 ```bash
 sleep 120
-python -X utf8 call_center/notify.py YYYY-MM-DD
+python -X utf8 notify.py YYYY-MM-DD
 ```
 
 * STEP3 の push exit code 0 を確認してから実行する

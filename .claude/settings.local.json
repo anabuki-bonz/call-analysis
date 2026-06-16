@@ -1,6 +1,14 @@
 {
   "permissions": {
-    "defaultMode": "dontAsk",
-    "allow": ["Bash(*)", "Edit", "MultiEdit", "Write", "Read"]
+    "allow": [
+      "Bash(*)",
+      "Edit",
+      "MultiEdit",
+      "Write",
+      "Read",
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget"
+    ],
+    "defaultMode": "dontAsk"
   }
 }
