@@ -577,17 +577,21 @@ def analyze(target_date: date,
             if len(hour_sub) > 0:
                 h_total[h] = len(hour_sub)
                 h_got[h]   = int((hour_sub["入電結果"] == True).sum())
+        _ats = row.get("平均通話時間秒")
+        _ats_int = int(_ats) if pd.notna(_ats) and _ats is not None else None
         ext_daily_list.append({
-            "ext":    ext_key,
-            "name":   str(row["案件名"]),
-            "type":   str(row["内線種別"]),
-            "total":  int(row["着信"]),
-            "got":    int(row["応答"]),
-            "missed": int(row["未応答"]),
-            "rate":   float(row["応答率"]),
-            "kpi":    kpi_label(float(row["応答率"])),
-            "h":      h_total,
-            "g":      h_got,
+            "ext":          ext_key,
+            "name":         str(row["案件名"]),
+            "type":         str(row["内線種別"]),
+            "total":        int(row["着信"]),
+            "got":          int(row["応答"]),
+            "missed":       int(row["未応答"]),
+            "rate":         float(row["応答率"]),
+            "kpi":          kpi_label(float(row["応答率"])),
+            "h":            h_total,
+            "g":            h_got,
+            "avg_talk_secs": _ats_int,
+            "talk_sum":     (_ats_int * int(row["応答"])) if _ats_int is not None else 0,
         })
 
     # --- OP別 ---
@@ -643,21 +647,55 @@ def analyze(target_date: date,
     # --- OP別時間帯データ（Zoiperクロス集計用） ---
     _ans_df = in_df[in_df["入電結果"] == True].copy()
     _ans_df["_z_str"] = _ans_df["取得Zoiper"].apply(to_zoiper_str)
+    _miss_df = in_df[in_df["入電結果"] == False].copy()
+
+    # 種別別未応答数を放棄Zoiperごとに集計: {z: {type: count}}
+    _miss_type_by_z: dict[str, dict[str, int]] = {}
+    for _, _mrow in _miss_df.iterrows():
+        _zt = normalize_type(_mrow.get("内線種別"))
+        if _zt is None:
+            continue
+        _zt = str(_zt)
+        for _zd in to_zoiper_list(_mrow.get("放棄Zoiper")):
+            if _zd not in _miss_type_by_z:
+                _miss_type_by_z[_zd] = {}
+            _miss_type_by_z[_zd][_zt] = _miss_type_by_z[_zd].get(_zt, 0) + 1
+
     op_daily_list: list[dict] = []
     for row_data in op_rows:
         z = row_data["Zoiper"]
         z_ans = _ans_df[_ans_df["_z_str"] == z]
         h_got_op = [int((z_ans["時刻"] == h).sum()) for h in range(24)]
+        # 種別別応答数
+        type_got_op: dict[str, int] = {}
+        if not z_ans.empty and "内線種別" in z_ans.columns:
+            for t_val, cnt in z_ans["内線種別"].apply(normalize_type).value_counts().items():
+                if t_val is not None:
+                    type_got_op[str(t_val)] = int(cnt)
+        # 種別別着信数（応答数 + 未応答数）
+        type_missed_op = _miss_type_by_z.get(z, {})
+        type_total_op: dict[str, int] = {}
+        all_types = set(type_got_op) | set(type_missed_op)
+        for _t in all_types:
+            type_total_op[_t] = type_got_op.get(_t, 0) + type_missed_op.get(_t, 0)
+        s = op_stats.get(z, {})
+        talk_sum_op = int(s.get("通話合計秒", 0) or 0)
+        talk_cnt_op = int(s.get("通話件数", 0) or 0)
+        avg_talk_op = int(round(talk_sum_op / talk_cnt_op)) if talk_cnt_op > 0 else None
         op_daily_list.append({
-            "zoiper":    z,
-            "name":      row_data["OP名"],
-            "total":     row_data["着信"],
-            "got":       row_data["応答"],
-            "missed":    row_data["未応答"],
-            "rate":      float(row_data["応答率"]) if row_data["応答率"] is not None else None,
-            "work_hrs":  float(row_data["稼働時間"]),
-            "cph":       float(row_data["CPH"]) if row_data["CPH"] is not None else None,
-            "h_got":     h_got_op,
+            "zoiper":         z,
+            "name":           row_data["OP名"],
+            "total":          row_data["着信"],
+            "got":            row_data["応答"],
+            "missed":         row_data["未応答"],
+            "rate":           float(row_data["応答率"]) if row_data["応答率"] is not None else None,
+            "work_hrs":       float(row_data["稼働時間"]),
+            "cph":            float(row_data["CPH"]) if row_data["CPH"] is not None else None,
+            "avg_talk_secs":  avg_talk_op,
+            "talk_sum":       talk_sum_op,
+            "h_got":          h_got_op,
+            "type_got":       type_got_op,
+            "type_total":     type_total_op,
         })
 
     # --- 前週比・前月同曜日平均比 ---
@@ -1444,8 +1482,19 @@ body{margin:0;padding:0}
 .mtab{background:none;border:1px solid transparent;border-bottom:none;padding:5px 12px;cursor:pointer;font-size:0.82em;border-radius:4px 4px 0 0;color:#555;font-family:inherit;margin-bottom:-2px}
 .mtab:hover{background:#e8f0fe;color:#1a73e8}
 .mtab.mtab-active{background:#fff;border-color:#dee2e6;border-bottom-color:#fff;color:#0d6efd;font-weight:bold}
-.mtab-panel{padding-top:12px;overflow-x:auto}
-.mtab-panel table{font-size:0.8em;white-space:nowrap}
+.mtab-panel{padding-top:12px;max-height:75vh;overflow:auto}
+.mtab-panel table{font-size:0.8em;white-space:nowrap;border-collapse:separate;border-spacing:0}
+.mtab-panel th,.mtab-panel td{border:1px solid #ccc;padding:3px 6px;text-align:center}
+.mtab-panel thead th{position:sticky;top:0;z-index:3;background:#f0f0f0}
+.sticky-l1{position:sticky;left:0;z-index:2;background:#fafafa;min-width:36px}
+.sticky-l2{position:sticky;left:36px;z-index:2;background:#fafafa;min-width:90px;text-align:left}
+.sticky-l3{position:sticky;left:126px;z-index:2;background:#fafafa;min-width:54px;text-align:left}
+thead th.sticky-l1,thead th.sticky-l2,thead th.sticky-l3{z-index:4}
+.metric-lbl{font-size:0.75em;color:#444;text-align:left}
+.total-block td,.total-block th{background:#f5f5f5;font-weight:bold}
+.row-grp-first td{border-top:2px solid #aaa}
+.sort-th{cursor:pointer;user-select:none}
+thead .sort-th:hover{background:#dde8fc}
 #legend-wrap{margin-top:12px;padding-top:10px;border-top:1px solid #ddd;font-size:0.78em}
 .legend-title{font-weight:bold;color:#555;margin-bottom:5px}
 .legend-cat{font-weight:bold;color:#666;margin:6px 0 2px;font-size:0.9em}
@@ -1461,6 +1510,14 @@ var viewFrom = '';
 var viewTo   = '';
 var extFilterType = '';
 var extFilterExt  = '';
+var _mVData = {};
+var _mTSort = {};
+var _mTSortDef = {
+  'op-day':{key:'cph',dir:'desc'},
+  'op-hour':{key:'cph',dir:'desc'},
+  'op-weekday':{key:'cph',dir:'desc'},
+  'op-type':{key:'cph',dir:'desc'}
+};
 
 function fmtSecs(s) {
   if (s == null) return '-';
@@ -1671,6 +1728,13 @@ function switchMTab(btn, viewId, tabId) {
   var panel = document.getElementById(prefix + '-' + tabId);
   if (panel) panel.style.display = 'block';
 }
+function mTabSort(viewId, tabId, sortKey) {
+  var sk = viewId + '-' + tabId;
+  var cur = _mTSort[sk] || _mTSortDef[tabId] || {key:null, dir:'asc'};
+  _mTSort[sk] = {key:sortKey, dir:(cur.key===sortKey&&cur.dir==='asc')?'desc':'asc'};
+  var panel = document.getElementById('mtab-' + viewId + '-' + tabId);
+  if (panel) panel.innerHTML = buildMTabContent(tabId, viewId, _mVData[viewId]||[]);
+}
 
 function renderMonthView(el, isThis) {
   var viewId = isThis ? 'this-month' : 'prev-month';
@@ -1684,6 +1748,7 @@ function renderMonthView(el, isThis) {
   var title = (isThis ? '当月累計' : '前月累計') + ' (' + y + '年' + m + '月)';
   var rows = getFilteredDays();
   rows.sort(function(a, b) { return a.date.localeCompare(b.date); });
+  _mVData[viewId] = rows;
   if (!rows.length) {
     el.innerHTML = '<h2>' + title + '</h2><p style="color:#aaa">データなし</p>';
     return;
@@ -1696,13 +1761,15 @@ function renderMonthView(el, isThis) {
   if (fl) html += '<p style="color:#888;font-size:0.85em">※ 案件絞り込み中。稼働時間・CPHは全体値です。</p>';
 
   var tabs = [
-    {id:'type-day',     label:'種別×日'},
-    {id:'type-hour',    label:'種別×時間'},
-    {id:'type-weekday', label:'種別×曜日'},
-    {id:'hour-weekday', label:'時間×曜日'},
-    {id:'op-day',       label:'Zoiper×日'},
-    {id:'op-hour',      label:'Zoiper×時間'},
-    {id:'op-weekday',   label:'Zoiper×曜日'},
+    {id:'type-day',      label:'種別×日'},
+    {id:'type-hour',     label:'種別×時間'},
+    {id:'type-weekday',  label:'種別×曜日'},
+    {id:'day-hour',      label:'日×時間'},
+    {id:'weekday-hour',  label:'曜日×時間'},
+    {id:'op-day',        label:'Zoiper×日'},
+    {id:'op-hour',       label:'Zoiper×時間'},
+    {id:'op-weekday',    label:'Zoiper×曜日'},
+    {id:'op-type',       label:'Zoiper×種別'},
   ];
   html += '<div class="month-tabs">';
   tabs.forEach(function(t, i) {
@@ -1711,282 +1778,757 @@ function renderMonthView(el, isThis) {
   html += '</div>';
   tabs.forEach(function(t, i) {
     html += '<div class="mtab-panel" id="mtab-' + viewId + '-' + t.id + '" style="display:' + (i===0?'block':'none') + '">';
-    html += buildMTabContent(t.id, rows);
+    html += buildMTabContent(t.id, viewId, rows);
     html += '</div>';
   });
   el.innerHTML = html;
 }
 
-function buildMTabContent(tabId, rows) {
-  if (tabId === 'type-day')     return buildTypeDayTab(rows);
-  if (tabId === 'type-hour')    return buildTypeHourTab(rows);
-  if (tabId === 'type-weekday') return buildTypeWeekdayTab(rows);
-  if (tabId === 'hour-weekday') return buildHourWeekdayTab(rows);
-  if (tabId === 'op-day')       return buildOpDayTab(rows);
-  if (tabId === 'op-hour')      return buildOpHourTab(rows);
-  if (tabId === 'op-weekday')   return buildOpWeekdayTab(rows);
+function buildMTabContent(tabId, viewId, rows) {
+  if (tabId === 'type-day')     return buildTypeDayTab(rows, viewId, tabId);
+  if (tabId === 'type-hour')    return buildTypeHourTab(rows, viewId, tabId);
+  if (tabId === 'type-weekday') return buildTypeWeekdayTab(rows, viewId, tabId);
+  if (tabId === 'day-hour')     return buildDayHourTab(rows, viewId, tabId);
+  if (tabId === 'weekday-hour') return buildWeekdayHourTab(rows, viewId, tabId);
+  if (tabId === 'op-day')       return buildOpDayTab(rows, viewId, tabId);
+  if (tabId === 'op-hour')      return buildOpHourTab(rows, viewId, tabId);
+  if (tabId === 'op-weekday')   return buildOpWeekdayTab(rows, viewId, tabId);
+  if (tabId === 'op-type')      return buildOpTypeTab(rows, viewId, tabId);
   return '';
 }
 
 function _typeName(t) { return typeNames[t] || t; }
-function _r(v, d) { return v != null ? v : (d != null ? d : '-'); }
 function _rateCell(got, total) {
   if (!total) return '<td style="color:#ccc">-</td>';
   var rate = Math.round(got/total*1000)/10;
   return '<td class="' + rateCls(rate) + '" title="' + rate + '%">' + got + '/' + total + '</td>';
 }
 function _cphVal(got, wh) { return (wh > 0 && got > 0) ? Math.round(got/wh*10)/10 : null; }
+function _fmtW(w) { return w > 0 ? w.toFixed(1) + 'h' : '-'; }
+function _fmtTalk(s) { return s != null ? Math.floor(s/60) + ':' + ('0'+s%60).slice(-2) : '-'; }
 
-function buildTypeDayTab(rows) {
-  var types = [], typeSet = {};
-  rows.forEach(function(r) {
-    (r.ext_daily||[]).forEach(function(e) {
-      if (!typeSet[e.type]) { typeSet[e.type] = true; types.push(e.type); }
+// 絞り込み中は ext_daily から合計を再計算
+function _getFilteredTotals(r) {
+  if (!extFilterType && !extFilterExt) {
+    return {total:r.total, got:r.got, missed:r.missed,
+            work_hrs:r.work_hrs||0, avg_cph:r.avg_cph, avg_talk_secs:r.avg_talk_secs};
+  }
+  var t=0, g=0, ts=0;
+  (r.ext_daily||[]).forEach(function(e) {
+    if (extFilterType && e.type !== extFilterType) return;
+    if (extFilterExt  && e.ext  !== extFilterExt)  return;
+    t += e.total; g += e.got; ts += e.talk_sum||0;
+  });
+  return {total:t, got:g, missed:t-g,
+          work_hrs:r.work_hrs||0, avg_cph:r.avg_cph,
+          avg_talk_secs: g>0 ? Math.round(ts/g) : null};
+}
+
+// 種別×* テーブルヘッダー（#, 種別名, 指標名 の3固定列）
+// sort header helper — uses template literal so onclick quotes are safe
+function _sth(lbl, sk, cls, vid, tid, spec) {
+  var arrow = spec&&spec.key===sk ? (spec.dir==='desc'?'▼':'▲') : '';
+  var c = cls ? cls+' sort-th' : 'sort-th';
+  return `<th class="${c}" onclick="mTabSort('${vid}','${tid}','${sk}')">${lbl}${arrow?' '+arrow:''}</th>`;
+}
+
+function _typeTableHead(colLabels, colKeys, viewId, tabId, spec) {
+  var h = '<thead><tr>';
+  h += _sth('#','num','sticky-l1',viewId,tabId,spec);
+  h += _sth('種別','name','sticky-l2',viewId,tabId,spec);
+  h += '<th class="sticky-l3">指標</th>';
+  colLabels.forEach(function(l,i){ h += _sth(l,colKeys[i],'',viewId,tabId,spec); });
+  h += _sth('合計','total','',viewId,tabId,spec);
+  h += '</tr></thead>';
+  return h;
+}
+
+// 種別の4指標行（着信/応答/未応答/応答率）を生成
+function _typeRows(typeNo, typeName, metrics, cols) {
+  // metrics: {total, got, missed, colData:[{total,got},...]}
+  var LABELS = ['着信数','応答数','未応答数','応答率'];
+  var html = '';
+  LABELS.forEach(function(lbl, li) {
+    var cls = li===0 ? ' class="row-grp-first"' : '';
+    html += '<tr' + cls + '>';
+    if (li===0) {
+      html += '<td class="sticky-l1" rowspan="4">' + typeNo + '</td>';
+      html += '<td class="sticky-l2" rowspan="4">' + typeName + '</td>';
+    }
+    html += '<td class="sticky-l3 metric-lbl">' + lbl + '</td>';
+    cols.forEach(function(c) {
+      if (li===0) html += '<td>' + (c.total||0) + '</td>';
+      else if (li===1) html += '<td>' + (c.got||0) + '</td>';
+      else if (li===2) html += '<td>' + ((c.total||0)-(c.got||0)) + '</td>';
+      else {
+        if (!c.total) html += '<td style="color:#ccc">-</td>';
+        else { var r=Math.round(c.got/c.total*1000)/10; html += '<td class="'+rateCls(r)+'" title="'+r+'%">'+r+'%</td>'; }
+      }
     });
+    // 合計列
+    if (li===0) html += '<td>' + metrics.total + '</td>';
+    else if (li===1) html += '<td>' + metrics.got + '</td>';
+    else if (li===2) html += '<td>' + metrics.missed + '</td>';
+    else {
+      if (!metrics.total) html += '<td style="color:#ccc">-</td>';
+      else { var r=Math.round(metrics.got/metrics.total*1000)/10; html += '<td class="'+rateCls(r)+'" title="'+r+'%">'+r+'%</td>'; }
+    }
+    html += '</tr>';
   });
-  if (!types.length) return '<p style="color:#aaa">データなし</p>';
-  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  var mat = {};
-  types.forEach(function(t){ mat[t]={}; });
-  rows.forEach(function(r) {
-    (r.ext_daily||[]).forEach(function(e) {
-      if (!mat[e.type]) return;
-      if (!mat[e.type][r.date]) mat[e.type][r.date]={total:0,got:0};
-      mat[e.type][r.date].total += e.total;
-      mat[e.type][r.date].got   += e.got;
+  return html;
+}
+
+// 合計ブロック行（種別×*）: 4指標
+function _typeTotalBlock(colAgg, grandTotal, grandGot) {
+  var LABELS = ['着信数','応答数','未応答数','応答率'];
+  var html = '';
+  LABELS.forEach(function(lbl, li) {
+    var cls = li===0 ? ' class="total-block row-grp-first"' : ' class="total-block"';
+    html += '<tr' + cls + '>';
+    if (li===0) {
+      html += '<td class="sticky-l1 total-block" rowspan="4">合計</td>';
+      html += '<td class="sticky-l2 total-block" rowspan="4"></td>';
+    }
+    html += '<td class="sticky-l3 metric-lbl">' + lbl + '</td>';
+    colAgg.forEach(function(c) {
+      if (li===0) html += '<td>' + c.total + '</td>';
+      else if (li===1) html += '<td>' + c.got + '</td>';
+      else if (li===2) html += '<td>' + (c.total-c.got) + '</td>';
+      else {
+        if (!c.total) html += '<td style="color:#ccc">-</td>';
+        else { var r=Math.round(c.got/c.total*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+      }
     });
+    // 右端合計
+    if (li===0) html += '<td>' + grandTotal + '</td>';
+    else if (li===1) html += '<td>' + grandGot + '</td>';
+    else if (li===2) html += '<td>' + (grandTotal-grandGot) + '</td>';
+    else {
+      if (!grandTotal) html += '<td style="color:#ccc">-</td>';
+      else { var r=Math.round(grandGot/grandTotal*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+    }
+    html += '</tr>';
   });
-  var html = '<table><tr><th style="text-align:left">種別</th>';
-  rows.forEach(function(r){ html += '<th>' + r.date.slice(5) + '<br>' + (r.weekday||'') + '</th>'; });
-  html += '<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
-  types.forEach(function(t) {
-    var rT=0,rG=0;
-    html += '<tr><td style="text-align:left">' + _typeName(t) + '</td>';
-    rows.forEach(function(r){ var c=mat[t][r.date]; if(c&&c.total){rT+=c.total;rG+=c.got;} html += c&&c.total ? _rateCell(c.got,c.total) : '<td style="color:#ccc">-</td>'; });
-    html += _rateCell(rG,rT) + '<td>-</td><td>-</td></tr>';
+  return html;
+}
+
+// Zoiper×* テーブルヘッダー（Zoiper, OP名, 指標名 の3固定列）
+function _opTableHead(colLabels, colKeys, viewId, tabId, spec) {
+  var h = '<thead><tr>';
+  h += _sth('Zoiper','zoiper','sticky-l1',viewId,tabId,spec);
+  h += _sth('OP名','name','sticky-l2',viewId,tabId,spec);
+  h += '<th class="sticky-l3">指標</th>';
+  colLabels.forEach(function(l,i){ h += _sth(l,colKeys[i],'',viewId,tabId,spec); });
+  h += _sth('合計','total','',viewId,tabId,spec);
+  h += '</tr></thead>';
+  return h;
+}
+function _dayHourHead(colLabels, colKeys, viewId, tabId, spec) {
+  var h = '<thead><tr>';
+  h += _sth('日付','date','sticky-l1',viewId,tabId,spec);
+  h += _sth('曜日','weekday','sticky-l2',viewId,tabId,spec);
+  h += '<th class="sticky-l3">指標</th>';
+  colLabels.forEach(function(l,i){ h += _sth(l,colKeys[i],'',viewId,tabId,spec); });
+  h += _sth('合計','total','',viewId,tabId,spec);
+  h += '</tr></thead>';
+  return h;
+}
+function _wdHourHead(colLabels, colKeys, viewId, tabId, spec) {
+  var h = '<thead><tr>';
+  h += _sth('曜日','weekday','sticky-l1',viewId,tabId,spec);
+  h += _sth('日数','cnt','sticky-l2',viewId,tabId,spec);
+  h += '<th class="sticky-l3">指標</th>';
+  colLabels.forEach(function(l,i){ h += _sth(l,colKeys[i],'',viewId,tabId,spec); });
+  h += _sth('合計','total','',viewId,tabId,spec);
+  h += '</tr></thead>';
+  return h;
+}
+function _sortTypes(types, spec, typeNums, typeData) {
+  var k=(spec&&spec.key)||'num', d=spec&&spec.dir==='desc'?-1:1;
+  types.sort(function(a,b){
+    if(k==='num') return d*((typeNums[a]||0)-(typeNums[b]||0));
+    if(k==='name') return d*_typeName(a).localeCompare(_typeName(b));
+    if(k==='total') return d*((typeData[a].total||0)-(typeData[b].total||0));
+    var mi=k.match(/^col_([0-9]+)$/);
+    if(mi){var ci=+mi[1];return d*((typeData[a].colV[ci]||0)-(typeData[b].colV[ci]||0));}
+    return 0;
   });
-  html += '<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
-  var totT=0,totG=0,totW=0;
+}
+function _sortOps(ops, spec, opData, opNames) {
+  var k=(spec&&spec.key)||'cph', d=spec&&spec.dir==='desc'?-1:1;
+  ops.sort(function(a,b){
+    var va, vb;
+    if(k==='cph') {
+      va=_cphVal(opData[a].got,opData[a].work_hrs)||0;
+      vb=_cphVal(opData[b].got,opData[b].work_hrs)||0;
+      return (va-vb)*d || (opData[b].got-opData[a].got);
+    }
+    if(k==='zoiper') return d*a.localeCompare(b);
+    if(k==='name') return d*(opNames[a]||'').localeCompare(opNames[b]||'');
+    if(k==='total'){va=opData[a].total||0;vb=opData[b].total||0;return d*(va-vb);}
+    if(k==='got')  {va=opData[a].got||0;  vb=opData[b].got||0;  return d*(va-vb);}
+    var mi=k.match(/^col_([0-9]+)$/);
+    if(mi){var ci=+mi[1];va=opData[a].colV[ci]||0;vb=opData[b].colV[ci]||0;return d*(va-vb);}
+    return 0;
+  });
+}
+
+// OPの7指標行を生成 (着信/応答/未応答/応答率/稼働時間/CPH/通話時間)
+function _opRows(zoiper, opName, totals, cols) {
+  // cols: [{total, got}, ...] or [{got}, ...] (通話時間/稼働時間はtotals側のみ)
+  var LABELS = ['着信数','応答数','未応答数','応答率','稼働時間','CPH','通話時間'];
+  var html = '';
+  LABELS.forEach(function(lbl, li) {
+    var cls = li===0 ? ' class="row-grp-first"' : '';
+    html += '<tr' + cls + '>';
+    if (li===0) {
+      html += '<td class="sticky-l1" rowspan="7">' + zoiper + '</td>';
+      html += '<td class="sticky-l2" rowspan="7">' + opName + '</td>';
+    }
+    html += '<td class="sticky-l3 metric-lbl">' + lbl + '</td>';
+    cols.forEach(function(c) {
+      if (li===0) html += '<td>' + (c.total!=null?c.total:'-') + '</td>';
+      else if (li===1) html += '<td>' + (c.got!=null?c.got:'-') + '</td>';
+      else if (li===2) html += '<td>' + (c.missed!=null?c.missed:(c.total!=null&&c.got!=null?c.total-c.got:'-')) + '</td>';
+      else if (li===3) {
+        if (!c.total) html += '<td style="color:#ccc">-</td>';
+        else { var r=Math.round(c.got/c.total*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+      }
+      else html += '<td style="color:#ccc">-</td>';
+    });
+    // 合計列
+    var tot=totals;
+    if (li===0) html += '<td>' + (tot.total!=null?tot.total:'-') + '</td>';
+    else if (li===1) html += '<td>' + (tot.got!=null?tot.got:'-') + '</td>';
+    else if (li===2) html += '<td>' + (tot.missed!=null?tot.missed:'-') + '</td>';
+    else if (li===3) {
+      if (!tot.total) html += '<td style="color:#ccc">-</td>';
+      else { var r=Math.round(tot.got/tot.total*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+    }
+    else if (li===4) html += '<td>' + _fmtW(tot.work_hrs||0) + '</td>';
+    else if (li===5) { var cph=_cphVal(tot.got,tot.work_hrs||0); html += '<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>'; }
+    else html += '<td>' + _fmtTalk(tot.avg_talk_secs) + '</td>';
+    html += '</tr>';
+  });
+  return html;
+}
+
+// OP合計ブロック（7指標）
+function _opTotalBlock(colAgg, grandTotals, extraCells) {
+  var LABELS = ['着信数','応答数','未応答数','応答率','稼働時間','CPH','通話時間'];
+  var html = '';
+  LABELS.forEach(function(lbl, li) {
+    var cls = li===0 ? ' class="total-block row-grp-first"' : ' class="total-block"';
+    html += '<tr' + cls + '>';
+    if (li===0) {
+      html += '<td class="sticky-l1 total-block" rowspan="7">合計</td>';
+      html += '<td class="sticky-l2 total-block" rowspan="7"></td>';
+    }
+    html += '<td class="sticky-l3 metric-lbl">' + lbl + '</td>';
+    colAgg.forEach(function(c) {
+      if (li===0) html += '<td>' + (c.total||0) + '</td>';
+      else if (li===1) html += '<td>' + (c.got||0) + '</td>';
+      else if (li===2) html += '<td>' + ((c.total||0)-(c.got||0)) + '</td>';
+      else if (li===3) {
+        if (!c.total) html += '<td style="color:#ccc">-</td>';
+        else { var r=Math.round(c.got/c.total*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+      }
+      else html += '<td style="color:#ccc">-</td>';
+    });
+    var gt = grandTotals;
+    if (li===0) html += '<td>' + (gt.total||0) + '</td>';
+    else if (li===1) html += '<td>' + (gt.got||0) + '</td>';
+    else if (li===2) html += '<td>' + ((gt.total||0)-(gt.got||0)) + '</td>';
+    else if (li===3) {
+      if (!gt.total) html += '<td style="color:#ccc">-</td>';
+      else { var r=Math.round(gt.got/gt.total*1000)/10; html += '<td class="'+rateCls(r)+'">'+r+'%</td>'; }
+    }
+    else if (li===4) html += '<td>' + _fmtW(gt.work_hrs||0) + '</td>';
+    else if (li===5) { var cph=_cphVal(gt.got,gt.work_hrs||0); html += '<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>'; }
+    else html += '<td>' + _fmtTalk(gt.avg_talk_secs) + '</td>';
+    if (extraCells && li < extraCells.length) html += extraCells[li];
+    else if (extraCells) html += '<td></td>';
+    html += '</tr>';
+  });
+  return html;
+}
+
+function buildTypeDayTab(rows, viewId, tabId) {
+  var types=[],typeSet={},typeNums={};
   rows.forEach(function(r){
-    totT+=r.total; totG+=r.got; totW+=r.work_hrs||0;
-    html += _rateCell(r.got,r.total);
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);}
+    });
   });
-  var totCph = _cphVal(totG,totW);
-  html += _rateCell(totG,totT)+'<td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(totCph)+'">'+(totCph!=null?totCph:'-')+'</td></tr>';
-  return html + '</table>';
+  if(!types.length) return '<p style="color:#aaa">データなし</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  types.forEach(function(t,i){typeNums[t]=i+1;});
+  var mat={};
+  types.forEach(function(t){mat[t]={};});
+  rows.forEach(function(r){
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!mat[e.type])return;
+      if(!mat[e.type][r.date])mat[e.type][r.date]={total:0,got:0};
+      mat[e.type][r.date].total+=e.total;
+      mat[e.type][r.date].got+=e.got;
+    });
+  });
+  var typeData={};
+  types.forEach(function(t){
+    var rT=0,rG=0;
+    var colV=rows.map(function(r){var c=mat[t][r.date]||{total:0,got:0};rT+=c.total;rG+=c.got;return c.total;});
+    typeData[t]={total:rT,got:rG,colV:colV};
+  });
+  var spec=_mTSort[viewId+'-'+tabId]||{key:'num',dir:'asc'};
+  _sortTypes(types,spec,typeNums,typeData);
+  var colLabels=rows.map(function(r){return r.date.slice(5)+'<br>'+(r.weekday||'');});
+  var colKeys=rows.map(function(_,i){return 'col_'+i;});
+  var colAgg=rows.map(function(r){var ft=_getFilteredTotals(r);return{total:ft.total,got:ft.got};});
+  var gT=colAgg.reduce(function(s,c){return s+c.total;},0);
+  var gG=colAgg.reduce(function(s,c){return s+c.got;},0);
+  var html='<table>'+_typeTableHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_typeTotalBlock(colAgg,gT,gG);
+  types.forEach(function(t){
+    var td=typeData[t];
+    var cols=rows.map(function(r){return mat[t][r.date]||{total:0,got:0};});
+    html+=_typeRows(typeNums[t],_typeName(t),{total:td.total,got:td.got,missed:td.total-td.got},cols);
+  });
+  return html+'</tbody></table>';
 }
 
 function buildTypeHourTab(rows) {
-  var types = [], typeSet = {};
-  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);} }); });
-  if (!types.length) return '<p style="color:#aaa">データなし</p>';
-  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  var mat = {};
-  types.forEach(function(t){ mat[t]=new Array(24).fill(null).map(function(){return{total:0,got:0};}); });
-  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!mat[e.type])return; for(var h=0;h<24;h++){mat[e.type][h].total+=(e.h||[])[h]||0;mat[e.type][h].got+=(e.g||[])[h]||0;} }); });
-  var html='<table><tr><th style="text-align:left">種別</th>';
-  for(var h=0;h<24;h++) html+='<th>'+h+'時</th>';
-  html+='<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
-  var totW=0,totG=0;
-  rows.forEach(function(r){totW+=r.work_hrs||0;totG+=r.got;});
-  types.forEach(function(t){
-    var rT=0,rG=0;
-    html+='<tr><td style="text-align:left">'+_typeName(t)+'</td>';
-    for(var h=0;h<24;h++){var c=mat[t][h];rT+=c.total;rG+=c.got;html+=c.total?_rateCell(c.got,c.total):'<td style="color:#ccc">-</td>';}
-    html+=_rateCell(rG,rT)+'<td>-</td><td>-</td></tr>';
+  var types=[],typeSet={},typeNums={};
+  rows.forEach(function(r){
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);}
+    });
   });
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
-  var hTots=new Array(24).fill(null).map(function(){return{t:0,g:0};});
-  rows.forEach(function(r){ for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){hTots[h].t+=hh.total||0;hTots[h].g+=hh.got||0;}} });
-  var allT=0,allG=0;
-  for(var h=0;h<24;h++){allT+=hTots[h].t;allG+=hTots[h].g;html+=hTots[h].t?_rateCell(hTots[h].g,hTots[h].t):'<td style="color:#ccc">-</td>';}
-  var cph=_cphVal(allG,totW);
-  html+=_rateCell(allG,allT)+'<td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
-  return html+'</table>';
-}
-
-function buildTypeWeekdayTab(rows) {
-  var WDAYS=['月','火','水','木','金','土','日','祝'];
-  var types=[],typeSet={};
-  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);} }); });
   if(!types.length) return '<p style="color:#aaa">データなし</p>';
   types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  types.forEach(function(t,i){typeNums[t]=i+1;});
+  var mat={};
+  types.forEach(function(t){mat[t]=new Array(24).fill(null).map(function(){return{total:0,got:0};});});
+  rows.forEach(function(r){
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!mat[e.type])return;
+      for(var h=0;h<24;h++){mat[e.type][h].total+=(e.h||[])[h]||0;mat[e.type][h].got+=(e.g||[])[h]||0;}
+    });
+  });
+  var hTots=new Array(24).fill(null).map(function(){return{total:0,got:0};});
+  rows.forEach(function(r){for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){hTots[h].total+=hh.total||0;hTots[h].got+=hh.got||0;}}});
+  var colHeaders=[];for(var h=0;h<24;h++)colHeaders.push(h+'時');
+  var html='<table>'+_typeTableHead(colHeaders)+'<tbody>';
+  var gT=hTots.reduce(function(s,c){return s+c.total;},0);
+  var gG=hTots.reduce(function(s,c){return s+c.got;},0);
+  html+=_typeTotalBlock(hTots,gT,gG);
+  types.forEach(function(t){
+    var rT=0,rG=0;
+    var cols=mat[t].map(function(c){rT+=c.total;rG+=c.got;return c;});
+    html+=_typeRows(typeNums[t],_typeName(t),{total:rT,got:rG,missed:rT-rG},cols);
+  });
+  return html+'</tbody></table>';
+}
+
+function buildTypeWeekdayTab(rows, viewId, tabId) {
+  var WDAYS=['月','火','水','木','金','土','日','祝'];
+  var types=[],typeSet={},typeNums={};
+  rows.forEach(function(r){
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);}
+    });
+  });
+  if(!types.length) return '<p style="color:#aaa">データなし</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  types.forEach(function(t,i){typeNums[t]=i+1;});
   var mat={};
   types.forEach(function(t){mat[t]={};WDAYS.forEach(function(w){mat[t][w]={total:0,got:0};});});
   rows.forEach(function(r){
     var wd=r.weekday;
     if(!wd||WDAYS.indexOf(wd)<0)return;
-    (r.ext_daily||[]).forEach(function(e){if(!mat[e.type])return;mat[e.type][wd].total+=e.total;mat[e.type][wd].got+=e.got;});
+    (r.ext_daily||[]).forEach(function(e){
+      if(extFilterType&&e.type!==extFilterType)return;
+      if(extFilterExt&&e.ext!==extFilterExt)return;
+      if(!mat[e.type])return;
+      mat[e.type][wd].total+=e.total;mat[e.type][wd].got+=e.got;
+    });
   });
   var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
   rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
-  var html='<table><tr><th style="text-align:left">種別</th>';
-  WDAYS.forEach(function(w){html+='<th>'+w+'</th>';});
-  html+='<th>合計</th></tr>';
+  var typeData={};
   types.forEach(function(t){
     var rT=0,rG=0;
-    html+='<tr><td style="text-align:left">'+_typeName(t)+'</td>';
-    WDAYS.forEach(function(w){var c=mat[t][w];rT+=c.total;rG+=c.got;html+=c.total?_rateCell(c.got,c.total):'<td style="color:#ccc">-</td>';});
-    html+=_rateCell(rG,rT)+'</tr>';
+    var colV=WDAYS.map(function(w){var c=mat[t][w];rT+=c.total;rG+=c.got;return c.total;});
+    typeData[t]={total:rT,got:rG,colV:colV};
   });
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
-  var totT=0,totG=0;
-  WDAYS.forEach(function(w){
-    var wrs=wBuckets[w];var wT=0,wG=0;wrs.forEach(function(r){wT+=r.total;wG+=r.got;});totT+=wT;totG+=wG;
-    var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
-    var wCph=_cphVal(wG,wW);
-    if(wT){html+='<td class="'+rateCls(Math.round(wG/wT*1000)/10)+'" title="稼働:'+wW.toFixed(1)+'h CPH:'+(wCph!=null?wCph:'-')+'">'+wG+'/'+wT+'</td>';}
-    else{html+='<td style="color:#ccc">-</td>';}
+  var spec=_mTSort[viewId+'-'+tabId]||{key:'num',dir:'asc'};
+  _sortTypes(types,spec,typeNums,typeData);
+  var colAgg=WDAYS.map(function(w){
+    var wrs=wBuckets[w];var wT=0,wG=0;
+    wrs.forEach(function(r){var ft=_getFilteredTotals(r);wT+=ft.total;wG+=ft.got;});
+    return{total:wT,got:wG};
   });
-  html+=_rateCell(totG,totT)+'</tr>';
-  return html+'</table>';
+  var gT=colAgg.reduce(function(s,c){return s+c.total;},0),gG=colAgg.reduce(function(s,c){return s+c.got;},0);
+  var colKeys=WDAYS.map(function(_,i){return 'col_'+i;});
+  var html='<table>'+_typeTableHead(WDAYS,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_typeTotalBlock(colAgg,gT,gG);
+  types.forEach(function(t){
+    var td=typeData[t];
+    var cols=WDAYS.map(function(w){return mat[t][w];});
+    html+=_typeRows(typeNums[t],_typeName(t),{total:td.total,got:td.got,missed:td.total-td.got},cols);
+  });
+  return html+'</tbody></table>';
 }
 
-function buildHourWeekdayTab(rows) {
-  var WDAYS=['月','火','水','木','金','土','日','祝'];
+function buildDayHourTab(rows, viewId, tabId) {
+  rows=rows.slice().sort(function(a,b){return a.date.localeCompare(b.date);});
+  if(!rows.length) return '<p style="color:#aaa">データなし</p>';
+  var rowData=rows.map(function(r){
+    var ft=_getFilteredTotals(r);
+    var hh=new Array(24).fill(null).map(function(_,h){return (r.hourly&&r.hourly[h])||{total:0,got:0};});
+    return{r:r,ft:ft,hh:hh,colV:hh.map(function(c){return c.total;})};
+  });
+  var spec=_mTSort[viewId+'-'+tabId]||{key:'date',dir:'asc'};
+  var dd=spec.dir==='desc'?-1:1;
+  rowData.sort(function(a,b){
+    var k=spec.key||'date';
+    if(k==='date'||k==='weekday') return dd*a.r.date.localeCompare(b.r.date);
+    if(k==='total') return dd*((a.ft.total||0)-(b.ft.total||0));
+    var mi=k.match(/^col_([0-9]+)$/);
+    if(mi){var ci=+mi[1];return dd*((a.colV[ci]||0)-(b.colV[ci]||0));}
+    return 0;
+  });
+  var hTots=new Array(24).fill(null).map(function(){return{total:0,got:0};});
+  rowData.forEach(function(rd){for(var h=0;h<24;h++){hTots[h].total+=rd.hh[h].total;hTots[h].got+=rd.hh[h].got;}});
+  var gT=hTots.reduce(function(s,c){return s+c.total;},0),gG=hTots.reduce(function(s,c){return s+c.got;},0);
+  var totW=rowData.reduce(function(s,rd){return s+(rd.ft.work_hrs||0);},0);
+  var totTs=rowData.reduce(function(s,rd){return s+(rd.ft.avg_talk_secs&&rd.ft.got?rd.ft.avg_talk_secs*rd.ft.got:0);},0);
+  var colLabels=[],colKeys=[];for(var h=0;h<24;h++){colLabels.push(h+'\u6642');colKeys.push('col_'+h);}
+  var LABELS=['\u7740\u4fe1\u6570','\u5fdc\u7b54\u6570','\u672a\u5fdc\u7b54\u6570','\u5fdc\u7b54\u7387','\u7a3c\u50cd\u6642\u9593','CPH','\u901a\u8a71\u6642\u9593'];
+  var html='<table>'+_dayHourHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  LABELS.forEach(function(lbl,li){
+    var cls=li===0?' class="total-block row-grp-first"':' class="total-block"';
+    html+='<tr'+cls+'>';
+    if(li===0){html+='<td class="sticky-l1 total-block" rowspan="7">\u5408\u8a08</td><td class="sticky-l2 total-block" rowspan="7"></td>';}
+    html+='<td class="sticky-l3 metric-lbl">'+lbl+'</td>';
+    hTots.forEach(function(c){
+      if(li===0)html+='<td>'+c.total+'</td>';
+      else if(li===1)html+='<td>'+c.got+'</td>';
+      else if(li===2)html+='<td>'+(c.total-c.got)+'</td>';
+      else if(li===3){if(!c.total)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(c.got/c.total*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+      else html+='<td style="color:#ccc">-</td>';
+    });
+    if(li===0)html+='<td>'+gT+'</td>';
+    else if(li===1)html+='<td>'+gG+'</td>';
+    else if(li===2)html+='<td>'+(gT-gG)+'</td>';
+    else if(li===3){if(!gT)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(gG/gT*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+    else if(li===4)html+='<td>'+_fmtW(totW)+'</td>';
+    else if(li===5){var cph=_cphVal(gG,totW);html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';}
+    else html+='<td>'+_fmtTalk(gG>0?Math.round(totTs/gG):null)+'</td>';
+    html+='</tr>';
+  });
+  rowData.forEach(function(rd){
+    var r=rd.r,ft=rd.ft,hh=rd.hh,cph=_cphVal(ft.got,ft.work_hrs||0);
+    LABELS.forEach(function(lbl,li){
+      var cls=li===0?' class="row-grp-first"':'';
+      html+='<tr'+cls+'>';
+      if(li===0){html+='<td class="sticky-l1" rowspan="7">'+r.date.slice(5)+'</td><td class="sticky-l2" rowspan="7">'+(r.weekday||'')+'</td>';}
+      html+='<td class="sticky-l3 metric-lbl">'+lbl+'</td>';
+      hh.forEach(function(c){
+        if(li===0)html+='<td>'+(c.total||0)+'</td>';
+        else if(li===1)html+='<td>'+(c.got||0)+'</td>';
+        else if(li===2)html+='<td>'+((c.total||0)-(c.got||0))+'</td>';
+        else if(li===3){if(!c.total)html+='<td style="color:#ccc">-</td>';else{var rv=Math.round(c.got/c.total*1000)/10;html+='<td class="'+rateCls(rv)+'">'+rv+'%</td>';}}
+        else html+='<td style="color:#ccc">-</td>';
+      });
+      if(li===0)html+='<td>'+ft.total+'</td>';
+      else if(li===1)html+='<td>'+ft.got+'</td>';
+      else if(li===2)html+='<td>'+ft.missed+'</td>';
+      else if(li===3){if(!ft.total)html+='<td style="color:#ccc">-</td>';else{var rv=Math.round(ft.got/ft.total*1000)/10;html+='<td class="'+rateCls(rv)+'">'+rv+'%</td>';}}
+      else if(li===4)html+='<td>'+_fmtW(ft.work_hrs||0)+'</td>';
+      else if(li===5)html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';
+      else html+='<td>'+_fmtTalk(ft.avg_talk_secs)+'</td>';
+      html+='</tr>';
+    });
+  });
+  return html+'</tbody></table>';
+}
+
+function buildWeekdayHourTab(rows, viewId, tabId) {
+  var WDAYS=['\u6708','\u706b','\u6c34','\u6728','\u91d1','\u571f','\u65e5','\u795d'];
   var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
   rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
-  var html='<table><tr><th>時間帯</th>';
+  var wHMat={};
+  WDAYS.forEach(function(w){wHMat[w]=new Array(24).fill(null).map(function(){return{total:0,got:0};});});
+  rows.forEach(function(r){
+    var wd=r.weekday;if(!wd||!wHMat[wd])return;
+    for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){wHMat[wd][h].total+=hh.total||0;wHMat[wd][h].got+=hh.got||0;}}
+  });
+  var wdData={};
   WDAYS.forEach(function(w){
     var wrs=wBuckets[w];
+    var wT=wHMat[w].reduce(function(s,c){return s+c.total;},0);
+    var wG=wHMat[w].reduce(function(s,c){return s+c.got;},0);
     var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
-    html+='<th>'+w+(wrs.length?'<br><small>'+wrs.length+'日</small>':'')+'</th>';
+    wdData[w]={total:wT,got:wG,work_hrs:wW,cnt:wrs.length,colV:wHMat[w].map(function(c){return c.total;})};
   });
-  html+='<th>合計</th></tr>';
-  var colTots=WDAYS.map(function(){return{t:0,g:0,w:0};});
-  for(var h=0;h<24;h++){
-    var rowT=0,rowG=0;
-    html+='<tr><td>'+h+'時台</td>';
-    WDAYS.forEach(function(w,wi){
-      var wrs=wBuckets[w];var hT=0,hG=0;
-      wrs.forEach(function(r){var hh=r.hourly&&r.hourly[h];if(hh){hT+=hh.total||0;hG+=hh.got||0;}});
-      colTots[wi].t+=hT;colTots[wi].g+=hG;rowT+=hT;rowG+=hG;
-      html+=hT?_rateCell(hG,hT):'<td style="color:#ccc">-</td>';
+  var activeWdays=WDAYS.filter(function(w){return wBuckets[w].length>0;});
+  var spec=_mTSort[viewId+'-'+tabId]||{key:'weekday',dir:'asc'};
+  var dd=spec.dir==='desc'?-1:1;
+  activeWdays.sort(function(a,b){
+    var k=spec.key||'weekday';
+    if(k==='weekday'||k==='cnt') return dd*(WDAYS.indexOf(a)-WDAYS.indexOf(b));
+    if(k==='total') return dd*((wdData[a].total||0)-(wdData[b].total||0));
+    var mi=k.match(/^col_([0-9]+)$/);
+    if(mi){var ci=+mi[1];return dd*((wdData[a].colV[ci]||0)-(wdData[b].colV[ci]||0));}
+    return 0;
+  });
+  var hTots=new Array(24).fill(null).map(function(){return{total:0,got:0};});
+  activeWdays.forEach(function(w){for(var h=0;h<24;h++){hTots[h].total+=wHMat[w][h].total;hTots[h].got+=wHMat[w][h].got;}});
+  var gT=hTots.reduce(function(s,c){return s+c.total;},0),gG=hTots.reduce(function(s,c){return s+c.got;},0);
+  var totW=activeWdays.reduce(function(s,w){return s+wdData[w].work_hrs;},0);
+  var colLabels=[],colKeys=[];for(var h=0;h<24;h++){colLabels.push(h+'\u6642');colKeys.push('col_'+h);}
+  var LABELS=['\u7740\u4fe1\u6570','\u5fdc\u7b54\u6570','\u672a\u5fdc\u7b54\u6570','\u5fdc\u7b54\u7387','\u7a3c\u50cd\u6642\u9593','CPH'];
+  var html='<table>'+_wdHourHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  LABELS.forEach(function(lbl,li){
+    var cls=li===0?' class="total-block row-grp-first"':' class="total-block"';
+    html+='<tr'+cls+'>';
+    if(li===0){html+='<td class="sticky-l1 total-block" rowspan="6">\u5408\u8a08</td><td class="sticky-l2 total-block" rowspan="6">'+rows.length+'\u65e5</td>';}
+    html+='<td class="sticky-l3 metric-lbl">'+lbl+'</td>';
+    hTots.forEach(function(c){
+      if(li===0)html+='<td>'+c.total+'</td>';
+      else if(li===1)html+='<td>'+c.got+'</td>';
+      else if(li===2)html+='<td>'+(c.total-c.got)+'</td>';
+      else if(li===3){if(!c.total)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(c.got/c.total*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+      else html+='<td style="color:#ccc">-</td>';
     });
-    html+=_rateCell(rowG,rowT)+'</tr>';
-  }
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td>稼働時間</td>';
-  var totW=0,totG=0;
-  WDAYS.forEach(function(w,wi){
-    var wrs=wBuckets[w];var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
-    colTots[wi].w=wW;totW+=wW;totG+=colTots[wi].g;
-    html+='<td>'+(wW>0?wW.toFixed(1)+'h':'-')+'</td>';
+    if(li===0)html+='<td>'+gT+'</td>';
+    else if(li===1)html+='<td>'+gG+'</td>';
+    else if(li===2)html+='<td>'+(gT-gG)+'</td>';
+    else if(li===3){if(!gT)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(gG/gT*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+    else if(li===4)html+='<td>'+_fmtW(totW)+'</td>';
+    else{var cph=_cphVal(gG,totW);html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';}
+    html+='</tr>';
   });
-  html+='<td>'+totW.toFixed(1)+'h</td></tr>';
-  html+='<tr style="font-weight:bold"><td>CPH</td>';
-  WDAYS.forEach(function(w,wi){
-    var c=colTots[wi];var cph=_cphVal(c.g,c.w);
-    html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';
+  activeWdays.forEach(function(w){
+    var wd=wdData[w],cph=_cphVal(wd.got,wd.work_hrs);
+    LABELS.forEach(function(lbl,li){
+      var cls=li===0?' class="row-grp-first"':'';
+      html+='<tr'+cls+'>';
+      if(li===0){html+='<td class="sticky-l1" rowspan="6">'+w+'</td><td class="sticky-l2" rowspan="6">'+wd.cnt+'\u65e5</td>';}
+      html+='<td class="sticky-l3 metric-lbl">'+lbl+'</td>';
+      wHMat[w].forEach(function(c){
+        if(li===0)html+='<td>'+c.total+'</td>';
+        else if(li===1)html+='<td>'+c.got+'</td>';
+        else if(li===2)html+='<td>'+(c.total-c.got)+'</td>';
+        else if(li===3){if(!c.total)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(c.got/c.total*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+        else html+='<td style="color:#ccc">-</td>';
+      });
+      if(li===0)html+='<td>'+wd.total+'</td>';
+      else if(li===1)html+='<td>'+wd.got+'</td>';
+      else if(li===2)html+='<td>'+(wd.total-wd.got)+'</td>';
+      else if(li===3){if(!wd.total)html+='<td style="color:#ccc">-</td>';else{var r=Math.round(wd.got/wd.total*1000)/10;html+='<td class="'+rateCls(r)+'">'+r+'%</td>';}}
+      else if(li===4)html+='<td>'+_fmtW(wd.work_hrs)+'</td>';
+      else html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';
+      html+='</tr>';
+    });
   });
-  var totCph=_cphVal(totG,totW);
-  html+='<td class="'+cphCls(totCph)+'">'+(totCph!=null?totCph:'-')+'</td></tr>';
-  return html+'</table>';
+  return html+'</tbody></table>';
 }
 
-function buildOpDayTab(rows) {
+function buildOpDayTab(rows, viewId, tabId) {
   var ops=[],opSet={},opNames={};
   rows.forEach(function(r){
     (r.op_daily||[]).forEach(function(o){
       if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}
     });
   });
-  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
-  ops.sort();
+  if(!ops.length) return '<p style="color:#aaa">Zoiper\u30c7\u30fc\u30bf\u306a\u3057\uff08\u518d\u5206\u6790\u5f8c\u306b\u8868\u793a\u3055\u308c\u307e\u3059\uff09</p>';
   var mat={};
   ops.forEach(function(z){mat[z]={};});
   rows.forEach(function(r){
     (r.op_daily||[]).forEach(function(o){
       if(!mat[o.zoiper])return;
-      mat[o.zoiper][r.date]={got:o.got,total:o.total,work_hrs:o.work_hrs,cph:o.cph};
+      mat[o.zoiper][r.date]={total:o.total,got:o.got,missed:o.missed,work_hrs:o.work_hrs||0,talk_sum:o.talk_sum||0};
     });
   });
-  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
-  rows.forEach(function(r){html+='<th>'+r.date.slice(5)+'<br>'+(r.weekday||'')+'</th>';});
-  html+='<th>合計応答</th><th>稼働時間</th><th>CPH</th></tr>';
+  var opData={};
   ops.forEach(function(z){
-    var totG=0,totW=0;
-    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
-    rows.forEach(function(r){
-      var c=mat[z][r.date];
-      if(c){totG+=c.got;totW+=c.work_hrs||0;}
-      html+=c&&c.got!=null?'<td>'+c.got+'</td>':'<td style="color:#ccc">-</td>';
-    });
-    var cph=_cphVal(totG,totW);
-    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+    var totT=0,totG=0,totW=0,totTs=0;
+    var colV=rows.map(function(r){var c=mat[z][r.date];if(c){totT+=c.total;totG+=c.got;totW+=c.work_hrs||0;totTs+=c.talk_sum||0;}return c?c.got:0;});
+    opData[z]={total:totT,got:totG,work_hrs:totW,avg_talk_secs:totG>0?Math.round(totTs/totG):null,colV:colV};
   });
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
-  var totT=0,totG=0,totW=0;
-  rows.forEach(function(r){totT+=r.total;totG+=r.got;totW+=r.work_hrs||0;html+='<td>'+r.got+'</td>';});
-  var cph=_cphVal(totG,totW);
-  html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
-  return html+'</table>';
+  var spec=_mTSort[viewId+'-'+tabId]||_mTSortDef[tabId]||{key:'cph',dir:'desc'};
+  _sortOps(ops,spec,opData,opNames);
+  var colLabels=rows.map(function(r){return r.date.slice(5)+'<br>'+(r.weekday||'');});
+  var colKeys=rows.map(function(_,i){return 'col_'+i;});
+  var colAgg=rows.map(function(r){return{total:r.total,got:r.got};});
+  var gT=rows.reduce(function(s,r){return s+r.total;},0),gG=rows.reduce(function(s,r){return s+r.got;},0);
+  var gW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+  var gTs=rows.reduce(function(s,r){return s+(r.avg_talk_secs&&r.got?r.avg_talk_secs*r.got:0);},0);
+  var grandTotals={total:gT,got:gG,missed:gT-gG,work_hrs:gW,avg_talk_secs:gG>0?Math.round(gTs/gG):null};
+  var html='<table>'+_opTableHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_opTotalBlock(colAgg,grandTotals);
+  ops.forEach(function(z){
+    var od=opData[z];
+    var cols=rows.map(function(r){return mat[z][r.date]||{total:0,got:0};});
+    html+=_opRows(z,opNames[z]||z,{total:od.total,got:od.got,missed:od.total-od.got,work_hrs:od.work_hrs,avg_talk_secs:od.avg_talk_secs},cols);
+  });
+  return html+'</tbody></table>';
 }
 
-function buildOpHourTab(rows) {
+function buildOpHourTab(rows, viewId, tabId) {
   var ops=[],opSet={},opNames={};
-  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}}); });
-  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
-  ops.sort();
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}
+    });
+  });
+  if(!ops.length) return '<p style="color:#aaa">Zoiper\u30c7\u30fc\u30bf\u306a\u3057\uff08\u518d\u5206\u6790\u5f8c\u306b\u8868\u793a\u3055\u308c\u307e\u3059\uff09</p>';
   var mat={};
   ops.forEach(function(z){mat[z]=new Array(24).fill(0);});
-  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!mat[o.zoiper])return;for(var h=0;h<24;h++)mat[o.zoiper][h]+=(o.h_got||[])[h]||0;}); });
-  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
-  for(var h=0;h<24;h++) html+='<th>'+h+'時</th>';
-  html+='<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
-  ops.forEach(function(z){
-    var totG=rows.reduce(function(s,r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});return s+(o?o.got:0);},0);
-    var totW=rows.reduce(function(s,r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});return s+(o?o.work_hrs||0:0);},0);
-    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
-    var rowG=0;
-    for(var h=0;h<24;h++){var v=mat[z][h];rowG+=v;html+='<td>'+(v>0?v:'-')+'</td>';}
-    var cph=_cphVal(totG,totW);
-    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!mat[o.zoiper])return;
+      for(var h=0;h<24;h++)mat[o.zoiper][h]+=(o.h_got||[])[h]||0;
+    });
   });
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
-  var hTots=new Array(24).fill(0);
-  rows.forEach(function(r){for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh)hTots[h]+=hh.got||0;}});
-  var allG=0,allW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
-  for(var h=0;h<24;h++){allG+=hTots[h];html+='<td>'+(hTots[h]>0?hTots[h]:'-')+'</td>';}
-  var cph=_cphVal(allG,allW);
-  html+='<td>'+allG+'</td><td>'+allW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
-  return html+'</table>';
+  var hTots=new Array(24).fill(null).map(function(){return{total:0,got:0};});
+  rows.forEach(function(r){for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){hTots[h].total+=hh.total||0;hTots[h].got+=hh.got||0;}}});
+  var opData={};
+  ops.forEach(function(z){
+    var totT=0,totG=0,totW=0,totTs=0;
+    rows.forEach(function(r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});if(o){totT+=o.total;totG+=o.got;totW+=o.work_hrs||0;totTs+=o.talk_sum||0;}});
+    opData[z]={total:totT,got:totG,work_hrs:totW,avg_talk_secs:totG>0?Math.round(totTs/totG):null,colV:mat[z].slice()};
+  });
+  var spec=_mTSort[viewId+'-'+tabId]||_mTSortDef[tabId]||{key:'cph',dir:'desc'};
+  _sortOps(ops,spec,opData,opNames);
+  var gT=hTots.reduce(function(s,c){return s+c.total;},0),gG=hTots.reduce(function(s,c){return s+c.got;},0);
+  var gW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+  var gTs=rows.reduce(function(s,r){return s+(r.avg_talk_secs&&r.got?r.avg_talk_secs*r.got:0);},0);
+  var grandTotals={total:gT,got:gG,missed:gT-gG,work_hrs:gW,avg_talk_secs:gG>0?Math.round(gTs/gG):null};
+  var colLabels=[],colKeys=[];for(var h=0;h<24;h++){colLabels.push(h+'\u6642');colKeys.push('col_'+h);}
+  var html='<table>'+_opTableHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_opTotalBlock(hTots,grandTotals);
+  ops.forEach(function(z){
+    var od=opData[z];
+    var cols=mat[z].map(function(g){return{total:null,got:g};});
+    html+=_opRows(z,opNames[z]||z,{total:od.total,got:od.got,missed:od.total-od.got,work_hrs:od.work_hrs,avg_talk_secs:od.avg_talk_secs},cols);
+  });
+  return html+'</tbody></table>';
 }
 
-function buildOpWeekdayTab(rows) {
-  var WDAYS=['月','火','水','木','金','土','日','祝'];
+function buildOpWeekdayTab(rows, viewId, tabId) {
+  var WDAYS=['\u6708','\u706b','\u6c34','\u6728','\u91d1','\u571f','\u65e5','\u795d'];
   var ops=[],opSet={},opNames={};
-  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}}); });
-  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
-  ops.sort();
-  var mat={};
-  ops.forEach(function(z){mat[z]={};WDAYS.forEach(function(w){mat[z][w]={got:0,work_hrs:0};});});
   rows.forEach(function(r){
-    var wd=r.weekday;
-    if(!wd||WDAYS.indexOf(wd)<0)return;
-    (r.op_daily||[]).forEach(function(o){if(!mat[o.zoiper])return;mat[o.zoiper][wd].got+=o.got;mat[o.zoiper][wd].work_hrs+=o.work_hrs||0;});
+    (r.op_daily||[]).forEach(function(o){
+      if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}
+    });
   });
-  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
-  WDAYS.forEach(function(w){html+='<th>'+w+'</th>';});
-  html+='<th>合計応答</th><th>稼働時間</th><th>CPH</th></tr>';
-  ops.forEach(function(z){
-    var totG=0,totW=0;
-    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
-    WDAYS.forEach(function(w){var c=mat[z][w];totG+=c.got;totW+=c.work_hrs;html+='<td>'+(c.got>0?c.got:'-')+'</td>';});
-    var cph=_cphVal(totG,totW);
-    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  if(!ops.length) return '<p style="color:#aaa">Zoiper\u30c7\u30fc\u30bf\u306a\u3057\uff08\u518d\u5206\u6790\u5f8c\u306b\u8868\u793a\u3055\u308c\u307e\u3059\uff09</p>';
+  var mat={};
+  ops.forEach(function(z){mat[z]={};WDAYS.forEach(function(w){mat[z][w]={total:0,got:0,work_hrs:0,talk_sum:0};});});
+  rows.forEach(function(r){
+    var wd=r.weekday;if(!wd||WDAYS.indexOf(wd)<0)return;
+    (r.op_daily||[]).forEach(function(o){
+      if(!mat[o.zoiper])return;
+      mat[o.zoiper][wd].total+=o.total;mat[o.zoiper][wd].got+=o.got;
+      mat[o.zoiper][wd].work_hrs+=o.work_hrs||0;mat[o.zoiper][wd].talk_sum+=o.talk_sum||0;
+    });
   });
-  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
   var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
   rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
-  var totG=0,totW=0;
-  WDAYS.forEach(function(w){
-    var wrs=wBuckets[w];var wG=wrs.reduce(function(s,r){return s+r.got;},0);var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
-    totG+=wG;totW+=wW;html+='<td>'+(wG>0?wG:'-')+'</td>';
+  var opData={};
+  ops.forEach(function(z){
+    var totT=0,totG=0,totW=0,totTs=0;
+    var colV=WDAYS.map(function(w){var c=mat[z][w];totT+=c.total;totG+=c.got;totW+=c.work_hrs;totTs+=c.talk_sum;return c.got;});
+    opData[z]={total:totT,got:totG,work_hrs:totW,avg_talk_secs:totG>0?Math.round(totTs/totG):null,colV:colV};
   });
-  var cph=_cphVal(totG,totW);
-  html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
-  return html+'</table>';
+  var spec=_mTSort[viewId+'-'+tabId]||_mTSortDef[tabId]||{key:'cph',dir:'desc'};
+  _sortOps(ops,spec,opData,opNames);
+  var colAgg=WDAYS.map(function(w){
+    var wrs=wBuckets[w];return{total:wrs.reduce(function(s,r){return s+r.total;},0),got:wrs.reduce(function(s,r){return s+r.got;},0)};
+  });
+  var gT=rows.reduce(function(s,r){return s+r.total;},0),gG=rows.reduce(function(s,r){return s+r.got;},0);
+  var gW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+  var gTs=rows.reduce(function(s,r){return s+(r.avg_talk_secs&&r.got?r.avg_talk_secs*r.got:0);},0);
+  var grandTotals={total:gT,got:gG,missed:gT-gG,work_hrs:gW,avg_talk_secs:gG>0?Math.round(gTs/gG):null};
+  var colKeys=WDAYS.map(function(_,i){return 'col_'+i;});
+  var html='<table>'+_opTableHead(WDAYS,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_opTotalBlock(colAgg,grandTotals);
+  ops.forEach(function(z){
+    var od=opData[z];
+    var cols=WDAYS.map(function(w){return mat[z][w];});
+    html+=_opRows(z,opNames[z]||z,{total:od.total,got:od.got,missed:od.total-od.got,work_hrs:od.work_hrs,avg_talk_secs:od.avg_talk_secs},cols);
+  });
+  return html+'</tbody></table>';
 }
+
+function buildOpTypeTab(rows, viewId, tabId) {
+  var ops=[],opSet={},opNames={};
+  var types=[],typeSet={},typeNums={};
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}
+      Object.keys(o.type_total||{}).forEach(function(t){if(!typeSet[t]){typeSet[t]=true;types.push(t);}});
+      Object.keys(o.type_got||{}).forEach(function(t){if(!typeSet[t]){typeSet[t]=true;types.push(t);}});
+    });
+    (r.ext_daily||[]).forEach(function(e){
+      if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);}
+    });
+  });
+  if(!ops.length||!types.length) return '<p style="color:#aaa">\u30c7\u30fc\u30bf\u306a\u3057</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  types.forEach(function(t,i){typeNums[t]=i+1;});
+  var mat={};
+  ops.forEach(function(z){mat[z]={};types.forEach(function(t){mat[z][t]={total:0,got:0};});});
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!mat[o.zoiper])return;
+      var tg=o.type_got||{},tt=o.type_total||{};
+      types.forEach(function(t){mat[o.zoiper][t].got+=(tg[t]||0);mat[o.zoiper][t].total+=(tt[t]||tg[t]||0);});
+    });
+  });
+  var opData={};
+  ops.forEach(function(z){
+    var totT=0,totG=0,totW=0,totTs=0;
+    rows.forEach(function(r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});if(o){totT+=o.total;totG+=o.got;totW+=o.work_hrs||0;totTs+=o.talk_sum||0;}});
+    opData[z]={total:totT,got:totG,work_hrs:totW,avg_talk_secs:totG>0?Math.round(totTs/totG):null,colV:types.map(function(t){return mat[z][t].got;})};
+  });
+  var spec=_mTSort[viewId+'-'+tabId]||_mTSortDef[tabId]||{key:'cph',dir:'desc'};
+  _sortOps(ops,spec,opData,opNames);
+  var colLabels=types.map(function(t){return typeNums[t]+'<br><small>'+_typeName(t)+'</small>';});
+  var colKeys=types.map(function(_,i){return 'col_'+i;});
+  var colAgg=types.map(function(t){
+    var tot=ops.reduce(function(s,z){return s+mat[z][t].total;},0);
+    var got=ops.reduce(function(s,z){return s+mat[z][t].got;},0);
+    return{total:tot,got:got};
+  });
+  var gT=rows.reduce(function(s,r){return s+r.total;},0),gG=rows.reduce(function(s,r){return s+r.got;},0);
+  var gW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+  var gTs=rows.reduce(function(s,r){return s+(r.avg_talk_secs&&r.got?r.avg_talk_secs*r.got:0);},0);
+  var grandTotals={total:gT,got:gG,missed:gT-gG,work_hrs:gW,avg_talk_secs:gG>0?Math.round(gTs/gG):null};
+  var html='<table>'+_opTableHead(colLabels,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_opTotalBlock(colAgg,grandTotals);
+  ops.forEach(function(z){
+    var od=opData[z];
+    var cols=types.map(function(t){return mat[z][t];});
+    html+=_opRows(z,opNames[z]||z,{total:od.total,got:od.got,missed:od.total-od.got,work_hrs:od.work_hrs,avg_talk_secs:od.avg_talk_secs},cols);
+  });
+  return html+'</tbody></table>';
+}
+
+
 function renderWeekdayView(el) {
   var rows = getFilteredDays();
   if (!rows.length) {
