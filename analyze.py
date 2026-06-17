@@ -1706,7 +1706,7 @@ function renderMonthView(el, isThis) {
   ];
   html += '<div class="month-tabs">';
   tabs.forEach(function(t, i) {
-    html += '<button class="mtab' + (i===0 ? ' mtab-active' : '') + '" onclick="switchMTab(this,\'' + viewId + '\',\'' + t.id + '\')">' + t.label + '</button>';
+    html += `<button class="mtab${i===0?' mtab-active':''}" onclick="switchMTab(this,'${viewId}','${t.id}')">${t.label}</button>`;
   });
   html += '</div>';
   tabs.forEach(function(t, i) {
