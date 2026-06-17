@@ -29,9 +29,8 @@ from pathlib import Path
 
 CHATWORK_API_BASE = "https://api.chatwork.com/v2"
 BASE_DIR = Path(__file__).parent
-PROJECT_ROOT = BASE_DIR.parent
 DEFAULT_REPORTS_DIR = BASE_DIR / "reports"
-DOTENV_PATH = PROJECT_ROOT / ".env"
+DOTENV_PATH = BASE_DIR / ".env"
 
 WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
