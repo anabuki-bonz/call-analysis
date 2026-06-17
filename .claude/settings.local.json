@@ -7,7 +7,8 @@
       "Write",
       "Read",
       "mcp__visualize__read_me",
-      "mcp__visualize__show_widget"
+      "mcp__visualize__show_widget",
+      "Bash(python -X utf8 analyze.py 2026-06-16)"
     ],
     "defaultMode": "dontAsk"
   }

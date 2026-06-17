@@ -640,6 +640,26 @@ def analyze(target_date: date,
     else:
         op_cph_best5 = op_cph_worst5 = op_rate_best5 = op_rate_worst5 = pd.DataFrame()
 
+    # --- OP別時間帯データ（Zoiperクロス集計用） ---
+    _ans_df = in_df[in_df["入電結果"] == True].copy()
+    _ans_df["_z_str"] = _ans_df["取得Zoiper"].apply(to_zoiper_str)
+    op_daily_list: list[dict] = []
+    for row_data in op_rows:
+        z = row_data["Zoiper"]
+        z_ans = _ans_df[_ans_df["_z_str"] == z]
+        h_got_op = [int((z_ans["時刻"] == h).sum()) for h in range(24)]
+        op_daily_list.append({
+            "zoiper":    z,
+            "name":      row_data["OP名"],
+            "total":     row_data["着信"],
+            "got":       row_data["応答"],
+            "missed":    row_data["未応答"],
+            "rate":      float(row_data["応答率"]) if row_data["応答率"] is not None else None,
+            "work_hrs":  float(row_data["稼働時間"]),
+            "cph":       float(row_data["CPH"]) if row_data["CPH"] is not None else None,
+            "h_got":     h_got_op,
+        })
+
     # --- 前週比・前月同曜日平均比 ---
     prev_day_s  = _day_stats(cdr, stf, prev_day_date,  in_ext_types)
     prev_week_s = _day_stats(cdr, stf, prev_week_date, in_ext_types)
@@ -705,6 +725,7 @@ def analyze(target_date: date,
         ext_special=ext_special, ext_daily=ext_daily_list,
         op_cph_best5=op_cph_best5, op_cph_worst5=op_cph_worst5,
         op_rate_best5=op_rate_best5, op_rate_worst5=op_rate_worst5,
+        op_daily=op_daily_list,
         hourly_calls=hourly_calls,
         talk_ranking=talk_ranking,
         miss_classified=miss_classified,
@@ -1276,6 +1297,7 @@ def build_html(d: dict) -> str:
             for _, row in d["op_cph_worst5"].iterrows()
         ],
         "ext_daily": d["ext_daily"],
+        "op_daily": d["op_daily"],
         "factors": factors_data,
         "hourly": [
             {"h": i, "total": r["着信"], "got": r["応答"], "missed": r["未応答"],
@@ -1418,6 +1440,12 @@ body{margin:0;padding:0}
 .nav-btn{display:block;width:100%;text-align:left;background:none;border:none;padding:5px 6px;cursor:pointer;font-size:0.82em;border-radius:4px;color:#333;font-family:inherit;margin-bottom:2px}
 .nav-btn:hover{background:#e0e8ff}
 .nav-btn.active{background:#0d6efd;color:#fff}
+.month-tabs{display:flex;flex-wrap:wrap;gap:4px;margin:12px 0 0;border-bottom:2px solid #dee2e6;padding-bottom:0}
+.mtab{background:none;border:1px solid transparent;border-bottom:none;padding:5px 12px;cursor:pointer;font-size:0.82em;border-radius:4px 4px 0 0;color:#555;font-family:inherit;margin-bottom:-2px}
+.mtab:hover{background:#e8f0fe;color:#1a73e8}
+.mtab.mtab-active{background:#fff;border-color:#dee2e6;border-bottom-color:#fff;color:#0d6efd;font-weight:bold}
+.mtab-panel{padding-top:12px;overflow-x:auto}
+.mtab-panel table{font-size:0.8em;white-space:nowrap}
 #legend-wrap{margin-top:12px;padding-top:10px;border-top:1px solid #ddd;font-size:0.78em}
 .legend-title{font-weight:bold;color:#555;margin-bottom:5px}
 .legend-cat{font-weight:bold;color:#666;margin:6px 0 2px;font-size:0.9em}
@@ -1634,7 +1662,18 @@ function extFilterLabel() {
   if (extFilterType) return '種別 ' + extFilterType;
   return '';
 }
+function switchMTab(btn, viewId, tabId) {
+  var prefix = 'mtab-' + viewId;
+  btn.closest('.month-tabs').querySelectorAll('.mtab').forEach(function(b) { b.classList.remove('mtab-active'); });
+  btn.classList.add('mtab-active');
+  var wrap = btn.closest('.view-section');
+  wrap.querySelectorAll('.mtab-panel').forEach(function(p) { p.style.display = 'none'; });
+  var panel = document.getElementById(prefix + '-' + tabId);
+  if (panel) panel.style.display = 'block';
+}
+
 function renderMonthView(el, isThis) {
+  var viewId = isThis ? 'this-month' : 'prev-month';
   var today = new Date();
   var y, m;
   if (isThis) { y = today.getFullYear(); m = today.getMonth() + 1; }
@@ -1649,102 +1688,304 @@ function renderMonthView(el, isThis) {
     el.innerHTML = '<h2>' + title + '</h2><p style="color:#aaa">データなし</p>';
     return;
   }
-  var days = rows.length;
-  var sumT=0, sumG=0, sumM=0, sumW=0, cphSum=0, cphN=0, talkSum=0, talkN=0, rateSum=0, rateN=0;
-  rows.forEach(function(r) {
-    sumT += r.total; sumG += r.got; sumM += r.missed; sumW += r.work_hrs || 0;
-    if (r.avg_cph != null)      { cphSum  += r.avg_cph;      cphN++;  }
-    if (r.avg_talk_secs != null){ talkSum += r.avg_talk_secs; talkN++; }
-    if (r.rate != null)          { rateSum += r.rate;          rateN++; }
-  });
-  var rateTotal = sumT > 0 ? Math.round(sumG / sumT * 1000) / 10 : null;
-  var rateAvg   = rateN  > 0 ? Math.round(rateSum  / rateN  * 10) / 10 : null;
-  var avgCph    = cphN   > 0 ? Math.round(cphSum   / cphN   * 10) / 10 : null;
-  var avgTalk   = talkN  > 0 ? Math.round(talkSum  / talkN)            : null;
-  var rc  = rateCls(rateTotal), rc2 = rateCls(rateAvg), cc = cphCls(avgCph);
   var period = rows[0].date + ' 〜 ' + rows[rows.length - 1].date;
   var fl = extFilterLabel();
-  var titleSuffix = fl ? ' <span style="font-size:0.75em;background:#e8f0fe;color:#1a73e8;border-radius:3px;padding:2px 6px">' + fl + '</span>' : '';
-  var html = '<h2>' + title + titleSuffix + '</h2><p style="color:#777;font-size:0.9em">対象期間: ' + period + '（' + days + '日）</p>';
-  if (fl) html += '<p style="color:#888;font-size:0.85em">※ 案件絞り込み中。稼働時間・CPH・通話時間は全体値です。</p>';
-  html += '<h3>KPI</h3><table>' +
-    '<tr><th style="text-align:left">指標</th><th>合計</th><th>平均（1日あたり）</th></tr>' +
-    '<tr><td style="text-align:left">稼働日数</td><td>' + days + '日</td><td>-</td></tr>' +
-    '<tr><td style="text-align:left">着信数</td><td>' + sumT + '件</td><td>' + Math.round(sumT/days*10)/10 + '件</td></tr>' +
-    '<tr><td style="text-align:left">応答数</td><td>' + sumG + '件</td><td>' + Math.round(sumG/days*10)/10 + '件</td></tr>' +
-    '<tr><td style="text-align:left">未応答数</td><td>' + sumM + '件</td><td>' + Math.round(sumM/days*10)/10 + '件</td></tr>' +
-    '<tr><td style="text-align:left">応答率</td>' +
-      '<td class="' + rc  + '">' + (rateTotal != null ? rateTotal + '%' : '-') + '</td>' +
-      '<td class="' + rc2 + '">' + (rateAvg   != null ? rateAvg   + '%' : '-') + '</td></tr>' +
-    (fl ? '' :
-    '<tr><td style="text-align:left">稼働時間</td><td>' + sumW.toFixed(1) + 'h</td><td>' + (sumW/days).toFixed(1) + 'h</td></tr>' +
-    '<tr><td style="text-align:left">平均CPH</td><td>-</td><td class="' + cc + '">' + (avgCph != null ? avgCph : '-') + '</td></tr>' +
-    '<tr><td style="text-align:left">平均通話時間</td><td>-</td><td>' + fmtSecs(avgTalk) + '</td></tr>') +
-    '</table>';
-  // 日別詳細
-  var dailyHtml = '<h3>日別詳細</h3><table>' +
-    '<tr><th>日付</th><th>曜日</th><th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>稼働時間</th><th>CPH</th></tr>';
-  rows.forEach(function(r) {
-    var rc3 = rateCls(r.rate), cc3 = cphCls(r.avg_cph);
-    dailyHtml += '<tr><td>' + r.date + '</td><td>' + (r.weekday || '') + '</td>' +
-      '<td>' + r.total + '</td><td>' + r.got + '</td><td>' + r.missed + '</td>' +
-      '<td class="' + rc3 + '">' + (r.rate != null ? r.rate + '%' : '-') + '</td>' +
-      '<td>' + (r.work_hrs != null ? r.work_hrs.toFixed(1) + 'h' : '-') + '</td>' +
-      '<td class="' + cc3 + '">' + (r.avg_cph != null ? r.avg_cph : '-') + '</td></tr>';
+  var ts = fl ? ' <span style="font-size:0.75em;background:#e8f0fe;color:#1a73e8;border-radius:3px;padding:2px 6px">' + fl + '</span>' : '';
+  var html = '<h2>' + title + ts + '</h2>';
+  html += '<p style="color:#777;font-size:0.9em">対象期間: ' + period + '（' + rows.length + '日）</p>';
+  if (fl) html += '<p style="color:#888;font-size:0.85em">※ 案件絞り込み中。稼働時間・CPHは全体値です。</p>';
+
+  var tabs = [
+    {id:'type-day',     label:'種別×日'},
+    {id:'type-hour',    label:'種別×時間'},
+    {id:'type-weekday', label:'種別×曜日'},
+    {id:'hour-weekday', label:'時間×曜日'},
+    {id:'op-day',       label:'Zoiper×日'},
+    {id:'op-hour',      label:'Zoiper×時間'},
+    {id:'op-weekday',   label:'Zoiper×曜日'},
+  ];
+  html += '<div class="month-tabs">';
+  tabs.forEach(function(t, i) {
+    html += '<button class="mtab' + (i===0 ? ' mtab-active' : '') + '" onclick="switchMTab(this,\'' + viewId + '\',\'' + t.id + '\')">' + t.label + '</button>';
   });
-  dailyHtml += '</table>';
-
-  // 時間帯別累計
-  var hourlyHtml = '<h3>時間帯別累計</h3><table>' +
-    '<tr><th>時間帯</th><th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>平均人員</th></tr>';
-  for (var h = 0; h < 24; h++) {
-    var hT=0, hG=0, hM=0, hOps=0, hTalkS=0, hTalkN=0, hDays=0;
-    rows.forEach(function(r) {
-      if (!r.hourly || !r.hourly[h]) return;
-      var hh = r.hourly[h];
-      hT += hh.total||0; hG += hh.got||0; hM += hh.missed||0; hOps += hh.ops||0;
-      if (hh.avg_talk != null) { hTalkS += hh.avg_talk; hTalkN++; }
-      if ((hh.total||0) > 0) hDays++;
-    });
-    var hRate = hT > 0 ? Math.round(hG/hT*1000)/10 : null;
-    hourlyHtml += '<tr><td>' + h + '時台</td><td>' + hT + '</td>' +
-      '<td>' + hG + '</td><td>' + hM + '</td>' +
-      '<td class="' + rateCls(hRate) + '">' + (hRate != null ? hRate + '%' : '-') + '</td>' +
-      '<td>' + Math.round(hOps/rows.length*10)/10 + '</td></tr>';
-  }
-  hourlyHtml += '</table>';
-
-  // 曜日別集計
-  var wDays = ['月','火','水','木','金','土','日','祝'];
-  var wBuckets = {};
-  wDays.forEach(function(d) { wBuckets[d] = []; });
-  rows.forEach(function(r) { if (r.weekday && wBuckets[r.weekday] !== undefined) wBuckets[r.weekday].push(r); });
-  var weekdayHtml = '<h3>曜日別集計</h3><table>' +
-    '<tr><th>曜日</th><th>日数</th><th>着信計</th><th>平均着信</th><th>未応答計</th><th>応答率</th><th>平均CPH</th></tr>';
-  wDays.forEach(function(day) {
-    var rs = wBuckets[day];
-    if (!rs.length) {
-      weekdayHtml += '<tr><td>' + day + '</td><td>0</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>';
-      return;
-    }
-    var n = rs.length;
-    var wT = rs.reduce(function(s,r){return s+r.total;},0);
-    var wG = rs.reduce(function(s,r){return s+r.got;},0);
-    var wM = rs.reduce(function(s,r){return s+r.missed;},0);
-    var wRate = wT > 0 ? Math.round(wG/wT*1000)/10 : null;
-    var wCArr = rs.filter(function(r){return r.avg_cph != null;});
-    var wCph = wCArr.length ? Math.round(wCArr.reduce(function(s,r){return s+r.avg_cph;},0)/wCArr.length*10)/10 : null;
-    weekdayHtml += '<tr><td>' + day + '</td><td>' + n + '</td><td>' + wT + '</td><td>' + Math.round(wT/n*10)/10 + '</td><td>' + wM + '</td>' +
-      '<td class="' + rateCls(wRate) + '">' + (wRate != null ? wRate + '%' : '-') + '</td>' +
-      '<td class="' + cphCls(wCph)  + '">' + (wCph  != null ? wCph  : '-') + '</td></tr>';
+  html += '</div>';
+  tabs.forEach(function(t, i) {
+    html += '<div class="mtab-panel" id="mtab-' + viewId + '-' + t.id + '" style="display:' + (i===0?'block':'none') + '">';
+    html += buildMTabContent(t.id, rows);
+    html += '</div>';
   });
-  weekdayHtml += '</table>';
-
-  html += '<div style="display:flex;gap:2em;align-items:flex-start;flex-wrap:wrap">' +
-    '<div style="flex:0 0 auto">' + dailyHtml + '</div>' +
-    '<div style="flex:1 1 auto;min-width:280px">' + hourlyHtml + weekdayHtml + '</div>' +
-    '</div>';
   el.innerHTML = html;
+}
+
+function buildMTabContent(tabId, rows) {
+  if (tabId === 'type-day')     return buildTypeDayTab(rows);
+  if (tabId === 'type-hour')    return buildTypeHourTab(rows);
+  if (tabId === 'type-weekday') return buildTypeWeekdayTab(rows);
+  if (tabId === 'hour-weekday') return buildHourWeekdayTab(rows);
+  if (tabId === 'op-day')       return buildOpDayTab(rows);
+  if (tabId === 'op-hour')      return buildOpHourTab(rows);
+  if (tabId === 'op-weekday')   return buildOpWeekdayTab(rows);
+  return '';
+}
+
+function _typeName(t) { return typeNames[t] || t; }
+function _r(v, d) { return v != null ? v : (d != null ? d : '-'); }
+function _rateCell(got, total) {
+  if (!total) return '<td style="color:#ccc">-</td>';
+  var rate = Math.round(got/total*1000)/10;
+  return '<td class="' + rateCls(rate) + '" title="' + rate + '%">' + got + '/' + total + '</td>';
+}
+function _cphVal(got, wh) { return (wh > 0 && got > 0) ? Math.round(got/wh*10)/10 : null; }
+
+function buildTypeDayTab(rows) {
+  var types = [], typeSet = {};
+  rows.forEach(function(r) {
+    (r.ext_daily||[]).forEach(function(e) {
+      if (!typeSet[e.type]) { typeSet[e.type] = true; types.push(e.type); }
+    });
+  });
+  if (!types.length) return '<p style="color:#aaa">データなし</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  var mat = {};
+  types.forEach(function(t){ mat[t]={}; });
+  rows.forEach(function(r) {
+    (r.ext_daily||[]).forEach(function(e) {
+      if (!mat[e.type]) return;
+      if (!mat[e.type][r.date]) mat[e.type][r.date]={total:0,got:0};
+      mat[e.type][r.date].total += e.total;
+      mat[e.type][r.date].got   += e.got;
+    });
+  });
+  var html = '<table><tr><th style="text-align:left">種別</th>';
+  rows.forEach(function(r){ html += '<th>' + r.date.slice(5) + '<br>' + (r.weekday||'') + '</th>'; });
+  html += '<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
+  types.forEach(function(t) {
+    var rT=0,rG=0;
+    html += '<tr><td style="text-align:left">' + _typeName(t) + '</td>';
+    rows.forEach(function(r){ var c=mat[t][r.date]; if(c&&c.total){rT+=c.total;rG+=c.got;} html += c&&c.total ? _rateCell(c.got,c.total) : '<td style="color:#ccc">-</td>'; });
+    html += _rateCell(rG,rT) + '<td>-</td><td>-</td></tr>';
+  });
+  html += '<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
+  var totT=0,totG=0,totW=0;
+  rows.forEach(function(r){
+    totT+=r.total; totG+=r.got; totW+=r.work_hrs||0;
+    html += _rateCell(r.got,r.total);
+  });
+  var totCph = _cphVal(totG,totW);
+  html += _rateCell(totG,totT)+'<td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(totCph)+'">'+(totCph!=null?totCph:'-')+'</td></tr>';
+  return html + '</table>';
+}
+
+function buildTypeHourTab(rows) {
+  var types = [], typeSet = {};
+  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);} }); });
+  if (!types.length) return '<p style="color:#aaa">データなし</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  var mat = {};
+  types.forEach(function(t){ mat[t]=new Array(24).fill(null).map(function(){return{total:0,got:0};}); });
+  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!mat[e.type])return; for(var h=0;h<24;h++){mat[e.type][h].total+=(e.h||[])[h]||0;mat[e.type][h].got+=(e.g||[])[h]||0;} }); });
+  var html='<table><tr><th style="text-align:left">種別</th>';
+  for(var h=0;h<24;h++) html+='<th>'+h+'時</th>';
+  html+='<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
+  var totW=0,totG=0;
+  rows.forEach(function(r){totW+=r.work_hrs||0;totG+=r.got;});
+  types.forEach(function(t){
+    var rT=0,rG=0;
+    html+='<tr><td style="text-align:left">'+_typeName(t)+'</td>';
+    for(var h=0;h<24;h++){var c=mat[t][h];rT+=c.total;rG+=c.got;html+=c.total?_rateCell(c.got,c.total):'<td style="color:#ccc">-</td>';}
+    html+=_rateCell(rG,rT)+'<td>-</td><td>-</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
+  var hTots=new Array(24).fill(null).map(function(){return{t:0,g:0};});
+  rows.forEach(function(r){ for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){hTots[h].t+=hh.total||0;hTots[h].g+=hh.got||0;}} });
+  var allT=0,allG=0;
+  for(var h=0;h<24;h++){allT+=hTots[h].t;allG+=hTots[h].g;html+=hTots[h].t?_rateCell(hTots[h].g,hTots[h].t):'<td style="color:#ccc">-</td>';}
+  var cph=_cphVal(allG,totW);
+  html+=_rateCell(allG,allT)+'<td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  return html+'</table>';
+}
+
+function buildTypeWeekdayTab(rows) {
+  var WDAYS=['月','火','水','木','金','土','日','祝'];
+  var types=[],typeSet={};
+  rows.forEach(function(r){ (r.ext_daily||[]).forEach(function(e){ if(!typeSet[e.type]){typeSet[e.type]=true;types.push(e.type);} }); });
+  if(!types.length) return '<p style="color:#aaa">データなし</p>';
+  types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
+  var mat={};
+  types.forEach(function(t){mat[t]={};WDAYS.forEach(function(w){mat[t][w]={total:0,got:0};});});
+  rows.forEach(function(r){
+    var wd=r.weekday;
+    if(!wd||WDAYS.indexOf(wd)<0)return;
+    (r.ext_daily||[]).forEach(function(e){if(!mat[e.type])return;mat[e.type][wd].total+=e.total;mat[e.type][wd].got+=e.got;});
+  });
+  var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
+  rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
+  var html='<table><tr><th style="text-align:left">種別</th>';
+  WDAYS.forEach(function(w){html+='<th>'+w+'</th>';});
+  html+='<th>合計</th></tr>';
+  types.forEach(function(t){
+    var rT=0,rG=0;
+    html+='<tr><td style="text-align:left">'+_typeName(t)+'</td>';
+    WDAYS.forEach(function(w){var c=mat[t][w];rT+=c.total;rG+=c.got;html+=c.total?_rateCell(c.got,c.total):'<td style="color:#ccc">-</td>';});
+    html+=_rateCell(rG,rT)+'</tr>';
+  });
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td style="text-align:left">合計</td>';
+  var totT=0,totG=0;
+  WDAYS.forEach(function(w){
+    var wrs=wBuckets[w];var wT=0,wG=0;wrs.forEach(function(r){wT+=r.total;wG+=r.got;});totT+=wT;totG+=wG;
+    var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+    var wCph=_cphVal(wG,wW);
+    if(wT){html+='<td class="'+rateCls(Math.round(wG/wT*1000)/10)+'" title="稼働:'+wW.toFixed(1)+'h CPH:'+(wCph!=null?wCph:'-')+'">'+wG+'/'+wT+'</td>';}
+    else{html+='<td style="color:#ccc">-</td>';}
+  });
+  html+=_rateCell(totG,totT)+'</tr>';
+  return html+'</table>';
+}
+
+function buildHourWeekdayTab(rows) {
+  var WDAYS=['月','火','水','木','金','土','日','祝'];
+  var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
+  rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
+  var html='<table><tr><th>時間帯</th>';
+  WDAYS.forEach(function(w){
+    var wrs=wBuckets[w];
+    var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+    html+='<th>'+w+(wrs.length?'<br><small>'+wrs.length+'日</small>':'')+'</th>';
+  });
+  html+='<th>合計</th></tr>';
+  var colTots=WDAYS.map(function(){return{t:0,g:0,w:0};});
+  for(var h=0;h<24;h++){
+    var rowT=0,rowG=0;
+    html+='<tr><td>'+h+'時台</td>';
+    WDAYS.forEach(function(w,wi){
+      var wrs=wBuckets[w];var hT=0,hG=0;
+      wrs.forEach(function(r){var hh=r.hourly&&r.hourly[h];if(hh){hT+=hh.total||0;hG+=hh.got||0;}});
+      colTots[wi].t+=hT;colTots[wi].g+=hG;rowT+=hT;rowG+=hG;
+      html+=hT?_rateCell(hG,hT):'<td style="color:#ccc">-</td>';
+    });
+    html+=_rateCell(rowG,rowT)+'</tr>';
+  }
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td>稼働時間</td>';
+  var totW=0,totG=0;
+  WDAYS.forEach(function(w,wi){
+    var wrs=wBuckets[w];var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+    colTots[wi].w=wW;totW+=wW;totG+=colTots[wi].g;
+    html+='<td>'+(wW>0?wW.toFixed(1)+'h':'-')+'</td>';
+  });
+  html+='<td>'+totW.toFixed(1)+'h</td></tr>';
+  html+='<tr style="font-weight:bold"><td>CPH</td>';
+  WDAYS.forEach(function(w,wi){
+    var c=colTots[wi];var cph=_cphVal(c.g,c.w);
+    html+='<td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td>';
+  });
+  var totCph=_cphVal(totG,totW);
+  html+='<td class="'+cphCls(totCph)+'">'+(totCph!=null?totCph:'-')+'</td></tr>';
+  return html+'</table>';
+}
+
+function buildOpDayTab(rows) {
+  var ops=[],opSet={},opNames={};
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}
+    });
+  });
+  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
+  ops.sort();
+  var mat={};
+  ops.forEach(function(z){mat[z]={};});
+  rows.forEach(function(r){
+    (r.op_daily||[]).forEach(function(o){
+      if(!mat[o.zoiper])return;
+      mat[o.zoiper][r.date]={got:o.got,total:o.total,work_hrs:o.work_hrs,cph:o.cph};
+    });
+  });
+  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
+  rows.forEach(function(r){html+='<th>'+r.date.slice(5)+'<br>'+(r.weekday||'')+'</th>';});
+  html+='<th>合計応答</th><th>稼働時間</th><th>CPH</th></tr>';
+  ops.forEach(function(z){
+    var totG=0,totW=0;
+    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
+    rows.forEach(function(r){
+      var c=mat[z][r.date];
+      if(c){totG+=c.got;totW+=c.work_hrs||0;}
+      html+=c&&c.got!=null?'<td>'+c.got+'</td>':'<td style="color:#ccc">-</td>';
+    });
+    var cph=_cphVal(totG,totW);
+    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
+  var totT=0,totG=0,totW=0;
+  rows.forEach(function(r){totT+=r.total;totG+=r.got;totW+=r.work_hrs||0;html+='<td>'+r.got+'</td>';});
+  var cph=_cphVal(totG,totW);
+  html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  return html+'</table>';
+}
+
+function buildOpHourTab(rows) {
+  var ops=[],opSet={},opNames={};
+  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}}); });
+  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
+  ops.sort();
+  var mat={};
+  ops.forEach(function(z){mat[z]=new Array(24).fill(0);});
+  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!mat[o.zoiper])return;for(var h=0;h<24;h++)mat[o.zoiper][h]+=(o.h_got||[])[h]||0;}); });
+  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
+  for(var h=0;h<24;h++) html+='<th>'+h+'時</th>';
+  html+='<th>合計</th><th>稼働時間</th><th>CPH</th></tr>';
+  ops.forEach(function(z){
+    var totG=rows.reduce(function(s,r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});return s+(o?o.got:0);},0);
+    var totW=rows.reduce(function(s,r){var o=(r.op_daily||[]).find(function(x){return x.zoiper===z;});return s+(o?o.work_hrs||0:0);},0);
+    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
+    var rowG=0;
+    for(var h=0;h<24;h++){var v=mat[z][h];rowG+=v;html+='<td>'+(v>0?v:'-')+'</td>';}
+    var cph=_cphVal(totG,totW);
+    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
+  var hTots=new Array(24).fill(0);
+  rows.forEach(function(r){for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh)hTots[h]+=hh.got||0;}});
+  var allG=0,allW=rows.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+  for(var h=0;h<24;h++){allG+=hTots[h];html+='<td>'+(hTots[h]>0?hTots[h]:'-')+'</td>';}
+  var cph=_cphVal(allG,allW);
+  html+='<td>'+allG+'</td><td>'+allW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  return html+'</table>';
+}
+
+function buildOpWeekdayTab(rows) {
+  var WDAYS=['月','火','水','木','金','土','日','祝'];
+  var ops=[],opSet={},opNames={};
+  rows.forEach(function(r){ (r.op_daily||[]).forEach(function(o){if(!opSet[o.zoiper]){opSet[o.zoiper]=true;ops.push(o.zoiper);opNames[o.zoiper]=o.name;}}); });
+  if(!ops.length) return '<p style="color:#aaa">Zoiperデータなし（再分析後に表示されます）</p>';
+  ops.sort();
+  var mat={};
+  ops.forEach(function(z){mat[z]={};WDAYS.forEach(function(w){mat[z][w]={got:0,work_hrs:0};});});
+  rows.forEach(function(r){
+    var wd=r.weekday;
+    if(!wd||WDAYS.indexOf(wd)<0)return;
+    (r.op_daily||[]).forEach(function(o){if(!mat[o.zoiper])return;mat[o.zoiper][wd].got+=o.got;mat[o.zoiper][wd].work_hrs+=o.work_hrs||0;});
+  });
+  var html='<table><tr><th style="text-align:left">OP名</th><th>Zoiper</th>';
+  WDAYS.forEach(function(w){html+='<th>'+w+'</th>';});
+  html+='<th>合計応答</th><th>稼働時間</th><th>CPH</th></tr>';
+  ops.forEach(function(z){
+    var totG=0,totW=0;
+    html+='<tr><td style="text-align:left">'+(opNames[z]||'')+'</td><td>'+z+'</td>';
+    WDAYS.forEach(function(w){var c=mat[z][w];totG+=c.got;totW+=c.work_hrs;html+='<td>'+(c.got>0?c.got:'-')+'</td>';});
+    var cph=_cphVal(totG,totW);
+    html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;border-top:2px solid #999"><td colspan="2" style="text-align:left">合計</td>';
+  var wBuckets={};WDAYS.forEach(function(w){wBuckets[w]=[];});
+  rows.forEach(function(r){if(r.weekday&&wBuckets[r.weekday])wBuckets[r.weekday].push(r);});
+  var totG=0,totW=0;
+  WDAYS.forEach(function(w){
+    var wrs=wBuckets[w];var wG=wrs.reduce(function(s,r){return s+r.got;},0);var wW=wrs.reduce(function(s,r){return s+(r.work_hrs||0);},0);
+    totG+=wG;totW+=wW;html+='<td>'+(wG>0?wG:'-')+'</td>';
+  });
+  var cph=_cphVal(totG,totW);
+  html+='<td>'+totG+'</td><td>'+totW.toFixed(1)+'h</td><td class="'+cphCls(cph)+'">'+(cph!=null?cph:'-')+'</td></tr>';
+  return html+'</table>';
 }
 function renderWeekdayView(el) {
   var rows = getFilteredDays();
