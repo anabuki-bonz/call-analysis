@@ -466,8 +466,12 @@ def analyze(target_date: date,
         if not talks.empty:
             avg_talk_secs = int(round(float(talks.mean())))
 
+    _ops_by_hour = {h: get_in_ops_by_status(stf, date_csv, h) for h in range(24)}
     active_ops_by_hour: dict[int, int] = {
-        h: len(get_in_ops_by_status(stf, date_csv, h)[0]) for h in range(24)
+        h: len(_ops_by_hour[h][0]) for h in range(24)
+    }
+    active_zoipers_by_hour: dict[int, set[str]] = {
+        h: set(_ops_by_hour[h][0].keys()) for h in range(24)
     }
 
     # --- 前日・前週の時間帯応答率（hourly比較用） ---
@@ -767,6 +771,7 @@ def analyze(target_date: date,
         hourly_calls=hourly_calls,
         talk_ranking=talk_ranking,
         miss_classified=miss_classified,
+        active_zoipers_by_hour=active_zoipers_by_hour,
     )
     return build_html(data)
 
@@ -1229,6 +1234,7 @@ def build_html(d: dict) -> str:
     _zoiper_name: dict[str, str] = {
         op["zoiper"]: op["name"] for op in d.get("op_daily", [])
     }
+    _active_z_by_hour: dict[int, set[str]] = d.get("active_zoipers_by_hour", {})
 
     if _ab_stats:
         ab_ranking_html = (
@@ -1282,7 +1288,8 @@ def build_html(d: dict) -> str:
                 for _mc in _miss_list:
                     for _zk in _mc.get("放棄Zoiper", "-").split(", "):
                         _zk = _zk.strip()
-                        if _zk and _zk != "-" and _zk in _zoiper_name:
+                        _active_h = _active_z_by_hour.get(_h, set())
+                        if _zk and _zk != "-" and _zk in _active_h:
                             _seen[_zk] = None
                 _zoipers = list(_seen.keys())
                 _rs_count = max(len(_zoipers), 1)
