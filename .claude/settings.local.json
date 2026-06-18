@@ -8,7 +8,9 @@
       "Read",
       "mcp__visualize__read_me",
       "mcp__visualize__show_widget",
-      "Bash(python -X utf8 analyze.py 2026-06-16)"
+      "Bash(python -X utf8 analyze.py 2026-06-16)",
+      "Bash(python -c ' *)",
+      "Bash(node --check \"G:\\\\マイドライブ\\\\Claude Code\\\\call-analysis\\\\_debug_js.js\")"
     ],
     "defaultMode": "dontAsk"
   }
