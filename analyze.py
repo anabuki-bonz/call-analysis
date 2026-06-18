@@ -94,9 +94,10 @@ def get_op_status(op_row: pd.Series, hour: int) -> str:
     b_out = op_row.get("休憩戻り")
     if pd.notna(b_in) and pd.notna(b_out):
         b_in, b_out = float(b_in), float(b_out)
-        in_break = (b_in <= hour < b_out) if b_out > b_in else (hour >= b_in or hour < b_out)
-        if in_break:
-            return "break"
+        if b_in != 0 or b_out != 0:  # 0/0 = no break recorded
+            in_break = (b_in <= hour < b_out) if b_out > b_in else (hour >= b_in or hour < b_out)
+            if in_break:
+                return "break"
     return "active"
 
 
