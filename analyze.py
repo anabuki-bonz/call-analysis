@@ -2100,7 +2100,7 @@ function buildTypeDayTab(rows, viewId, tabId) {
   return html+'</tbody></table>';
 }
 
-function buildTypeHourTab(rows) {
+function buildTypeHourTab(rows, viewId, tabId) {
   var types=[],typeSet={},typeNums={};
   rows.forEach(function(r){
     (r.ext_daily||[]).forEach(function(e){
@@ -2124,15 +2124,23 @@ function buildTypeHourTab(rows) {
   });
   var hTots=new Array(24).fill(null).map(function(){return{total:0,got:0};});
   rows.forEach(function(r){for(var h=0;h<24;h++){var hh=r.hourly&&r.hourly[h];if(hh){hTots[h].total+=hh.total||0;hTots[h].got+=hh.got||0;}}});
-  var colHeaders=[];for(var h=0;h<24;h++)colHeaders.push(h+'時');
-  var html='<table>'+_typeTableHead(colHeaders)+'<tbody>';
-  var gT=hTots.reduce(function(s,c){return s+c.total;},0);
-  var gG=hTots.reduce(function(s,c){return s+c.got;},0);
-  html+=_typeTotalBlock(hTots,gT,gG);
+  var typeData={};
   types.forEach(function(t){
     var rT=0,rG=0;
-    var cols=mat[t].map(function(c){rT+=c.total;rG+=c.got;return c;});
-    html+=_typeRows(typeNums[t],_typeName(t),{total:rT,got:rG,missed:rT-rG},cols);
+    var colV=new Array(24).fill(0).map(function(_,h){var c=mat[t][h];rT+=c.total;rG+=c.got;return c.total;});
+    typeData[t]={total:rT,got:rG,colV:colV};
+  });
+  var spec=_mTSort[viewId+'-'+tabId]||{key:'num',dir:'asc'};
+  _sortTypes(types,spec,typeNums,typeData);
+  var colHeaders=[];for(var h=0;h<24;h++)colHeaders.push(h+'時');
+  var colKeys=new Array(24).fill(0).map(function(_,i){return 'col_'+i;});
+  var gT=hTots.reduce(function(s,c){return s+c.total;},0);
+  var gG=hTots.reduce(function(s,c){return s+c.got;},0);
+  var html='<table>'+_typeTableHead(colHeaders,colKeys,viewId,tabId,spec)+'<tbody>';
+  html+=_typeTotalBlock(hTots,gT,gG);
+  types.forEach(function(t){
+    var td=typeData[t];
+    html+=_typeRows(typeNums[t],_typeName(t),{total:td.total,got:td.got,missed:td.total-td.got},mat[t]);
   });
   return html+'</tbody></table>';
 }
