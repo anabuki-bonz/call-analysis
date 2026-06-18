@@ -809,6 +809,12 @@ hr{border:1px solid #ddd;margin:1.5em 0}
 .hour-hdr[data-open="1"]{background:#4a90d9 !important;color:#fff !important}
 .hour-hdr[data-open="1"]::after{content:" ▲";font-size:0.75em;color:#fff}
 .detail-row>td{padding:0;background:#fafafa}
+.ab-row{cursor:pointer;user-select:none}
+.ab-row:hover{background:#dde8ff !important}
+.ab-row td:first-child::before{content:"▶ ";font-size:0.75em;color:#666}
+.ab-row[data-open="1"]{background:#4a90d9 !important;color:#fff !important}
+.ab-row[data-open="1"] td:first-child::before{content:"▼ ";color:#fff}
+.ab-row[data-open="1"] .rate-ok,.ab-row[data-open="1"] .rate-warn,.ab-row[data-open="1"] .rate-ng{background:inherit !important;color:#fff !important}
 .inner-table{width:100%;border-collapse:collapse;font-size:0.88em}
 .inner-table th,.inner-table td{border:1px solid #ddd;padding:3px 8px}
 .inner-table th{background:#e0e0e0;text-align:center}
@@ -1221,11 +1227,11 @@ def build_html(d: dict) -> str:
         )
         for _pi, _p in enumerate(_ab_stats):
             _rc = rate_class(_p["rate"])
+            _rid = f'ab-row-{_pi}'
             _did = f'ab-det-{_pi}'
             ab_ranking_html += (
-                f'<tr style="cursor:pointer" title="クリックで詳細を展開"'
-                f' onclick="var d=document.getElementById(\'{_did}\');'
-                f'd.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">'
+                f'<tr class="ab-row" id="{_rid}" data-open="" title="クリックで詳細を展開"'
+                f' onclick="toggleAbRow(\'{_rid}\',\'{_did}\')">'
                 f'<td style="text-align:left">{_p["name"]}</td>'
                 f'<td>{_p["total"]}</td><td>{_p["missed"]}</td>'
                 f'<td class="{_rc}">{_p["rate"]}%</td></tr>\n'
@@ -1417,6 +1423,21 @@ function toggleDetail(h) {{
   }}
   row.style.display = open ? 'none' : 'table-row';
   if (hdr) hdr.dataset.open = open ? '' : '1';
+}}
+function toggleAbRow(rowId, detId) {{
+  var row = document.getElementById(rowId);
+  var det = document.getElementById(detId);
+  if (!row || !det) return;
+  var open = row.dataset.open === '1';
+  var tbl = row.closest('table');
+  if (tbl) {{
+    tbl.querySelectorAll('.ab-row').forEach(function(r) {{ r.dataset.open = ''; }});
+    tbl.querySelectorAll('[id^="ab-det-"]').forEach(function(d) {{ d.style.display = 'none'; }});
+  }}
+  if (!open) {{
+    row.dataset.open = '1';
+    det.style.display = 'table-row';
+  }}
 }}
 function searchFilter(q) {{
   q = q.trim().toLowerCase();
