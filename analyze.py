@@ -1282,7 +1282,7 @@ def build_html(d: dict) -> str:
                 for _mc in _miss_list:
                     for _zk in _mc.get("放棄Zoiper", "-").split(", "):
                         _zk = _zk.strip()
-                        if _zk and _zk != "-":
+                        if _zk and _zk != "-" and _zk in _zoiper_name:
                             _seen[_zk] = None
                 _zoipers = list(_seen.keys())
                 _rs_count = max(len(_zoipers), 1)
