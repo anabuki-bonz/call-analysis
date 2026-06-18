@@ -1226,6 +1226,10 @@ def build_html(d: dict) -> str:
     _ab_stats = [_p for _p in _ab_stats if _p["rate"] < 90]
     _ab_stats.sort(key=lambda x: (x["rate"], -x["total"]))
 
+    _zoiper_name: dict[str, str] = {
+        op["zoiper"]: op["name"] for op in d.get("op_daily", [])
+    }
+
     if _ab_stats:
         ab_ranking_html = (
             '<div style="margin:1em 0">'
@@ -1256,6 +1260,7 @@ def build_html(d: dict) -> str:
                 _hg[_h].append(_c)
             _det = (
                 '<table><tr><th>時間帯</th><th>稼働OP数</th>'
+                '<th style="text-align:left">放棄Zoiper</th>'
                 '<th style="text-align:left">取れなかった理由</th></tr>\n'
             )
             for _h in sorted(_hg):
@@ -1272,15 +1277,45 @@ def build_html(d: dict) -> str:
                     )
                 else:
                     _rstr = "確認できません"
-                _det += (
-                    f'<tr><td>{_h}時台（{len(_miss_list)}件）</td>'
-                    f'<td>{_oh}</td>'
-                    f'<td style="text-align:left">{_rstr}</td></tr>\n'
-                )
+                # collect unique 放棄Zoiper in order of appearance
+                _seen: dict[str, None] = {}
+                for _mc in _miss_list:
+                    for _zk in _mc.get("放棄Zoiper", "-").split(", "):
+                        _zk = _zk.strip()
+                        if _zk and _zk != "-":
+                            _seen[_zk] = None
+                _zoipers = list(_seen.keys())
+                _rs_count = max(len(_zoipers), 1)
+                _hlabel = f'{_h}時台（{len(_miss_list)}件）'
+                if not _zoipers:
+                    _det += (
+                        f'<tr><td>{_hlabel}</td><td>{_oh}</td>'
+                        f'<td>-</td>'
+                        f'<td style="text-align:left">{_rstr}</td></tr>\n'
+                    )
+                else:
+                    for _zi, _zk in enumerate(_zoipers):
+                        _zname = _zoiper_name.get(_zk, "")
+                        _zlabel = f'{_zk} {_zname}' if _zname else _zk
+                        if _zi == 0:
+                            _det += (
+                                f'<tr>'
+                                f'<td rowspan="{_rs_count}">{_hlabel}</td>'
+                                f'<td rowspan="{_rs_count}">{_oh}</td>'
+                                f'<td style="text-align:left">{_zlabel}</td>'
+                                f'<td rowspan="{_rs_count}" style="text-align:left">{_rstr}</td>'
+                                f'</tr>\n'
+                            )
+                        else:
+                            _det += (
+                                f'<tr>'
+                                f'<td style="text-align:left">{_zlabel}</td>'
+                                f'</tr>\n'
+                            )
             _det += '</table>'
             ab_ranking_html += (
                 f'<tr id="{_did}" style="display:none">'
-                f'<td colspan="7" style="padding:8px;background:#f9f9f9">{_det}</td>'
+                f'<td colspan="7" style="padding:8px 8px 8px 24px;background:#f9f9f9">{_det}</td>'
                 f'</tr>\n'
             )
         ab_ranking_html += '</table>\n</div>\n'
