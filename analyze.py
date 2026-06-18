@@ -1209,8 +1209,19 @@ def build_html(d: dict) -> str:
     for _pn, _items in _ab_by_proj.items():
         _pt = len(_items)
         _pm = sum(1 for _, _c in _items if _c["結果"] == "未応答")
-        _pr = round((_pt - _pm) / _pt * 100, 1) if _pt > 0 else 100.0
-        _ab_stats.append({"name": _pn, "total": _pt, "missed": _pm, "rate": _pr})
+        _pg = _pt - _pm
+        _pr = round(_pg / _pt * 100, 1) if _pt > 0 else 100.0
+        _talks = []
+        for _, _c in _items:
+            try:
+                _tv = int(_c.get("通話時間", "") or "")
+                if _tv > 0:
+                    _talks.append(_tv)
+            except (ValueError, TypeError):
+                pass
+        _avg_talk = round(sum(_talks) / len(_talks)) if _talks else None
+        _ab_stats.append({"name": _pn, "total": _pt, "got": _pg, "missed": _pm,
+                          "rate": _pr, "avg_talk": _avg_talk})
 
     _ab_stats = [_p for _p in _ab_stats if _p["rate"] < 90]
     _ab_stats.sort(key=lambda x: (x["rate"], -x["total"]))
@@ -1222,19 +1233,20 @@ def build_html(d: dict) -> str:
             '▼ 特定案件ランキング（[A]/[B]・応答率90%未満）</div>\n'
             '<table><tr>'
             '<th style="text-align:left">案件名</th>'
-            '<th>着信</th><th>未応答</th><th>応答率</th>'
+            '<th>着信</th><th>応答</th><th>未応答</th><th>応答率</th><th>KPI</th><th>平均通話時間</th>'
             '</tr>\n'
         )
         for _pi, _p in enumerate(_ab_stats):
-            _rc = rate_class(_p["rate"])
             _rid = f'ab-row-{_pi}'
             _did = f'ab-det-{_pi}'
             ab_ranking_html += (
                 f'<tr class="ab-row" id="{_rid}" data-open="" title="クリックで詳細を展開"'
                 f' onclick="toggleAbRow(\'{_rid}\',\'{_did}\')">'
                 f'<td style="text-align:left">{_p["name"]}</td>'
-                f'<td>{_p["total"]}</td><td>{_p["missed"]}</td>'
-                f'<td class="{_rc}">{_p["rate"]}%</td></tr>\n'
+                f'<td>{_p["total"]}</td><td>{_p["got"]}</td><td>{_p["missed"]}</td>'
+                f'{_rate_td(_p["rate"])}'
+                f'{kpi_badge_html(_p["rate"])}'
+                f'<td>{fmt_seconds(_p["avg_talk"])}</td></tr>\n'
             )
             _pn = _p["name"]
             _hg: dict = {}
@@ -1243,18 +1255,17 @@ def build_html(d: dict) -> str:
                     _hg[_h] = []
                 _hg[_h].append(_c)
             _det = (
-                '<table><tr><th>時間帯</th><th>着信</th><th>未応答</th>'
-                '<th>稼働OP数</th><th style="text-align:left">取れなかった理由</th></tr>\n'
+                '<table><tr><th>時間帯</th><th>稼働OP数</th>'
+                '<th style="text-align:left">取れなかった理由</th></tr>\n'
             )
             for _h in sorted(_hg):
                 _clist = _hg[_h]
-                _th = len(_clist)
-                _mh = sum(1 for _c in _clist if _c["結果"] == "未応答")
+                _miss_list = [_c for _c in _clist if _c["結果"] == "未応答"]
+                if not _miss_list:
+                    continue
                 _oh = d["hourly"][_h]["active_ops"]
                 _rs = _miss_by_ph.get((_pn, _h), [])
-                if _mh == 0:
-                    _rstr = "-"
-                elif _rs:
+                if _rs:
                     _rcnt = Counter(_rs)
                     _rstr = "、".join(
                         f"{_r}({_cnt}件)" for _r, _cnt in sorted(_rcnt.items())
@@ -1262,14 +1273,14 @@ def build_html(d: dict) -> str:
                 else:
                     _rstr = "確認できません"
                 _det += (
-                    f'<tr><td>{_h}時台</td><td>{_th}</td><td>{_mh}</td>'
+                    f'<tr><td>{_h}時台（{len(_miss_list)}件）</td>'
                     f'<td>{_oh}</td>'
                     f'<td style="text-align:left">{_rstr}</td></tr>\n'
                 )
             _det += '</table>'
             ab_ranking_html += (
                 f'<tr id="{_did}" style="display:none">'
-                f'<td colspan="4" style="padding:8px;background:#f9f9f9">{_det}</td>'
+                f'<td colspan="7" style="padding:8px;background:#f9f9f9">{_det}</td>'
                 f'</tr>\n'
             )
         ab_ranking_html += '</table>\n</div>\n'
