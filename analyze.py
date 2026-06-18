@@ -1211,36 +1211,32 @@ def build_html(d: dict) -> str:
 
     if _ab_stats:
         ab_ranking_html = (
-            '<details style="margin:1em 0">'
-            '<summary style="cursor:pointer;font-weight:bold;font-size:1.1em;padding:4px 0">'
-            '特定案件ランキング（[A]/[B]・応答率90%未満）</summary>\n'
-        )
-        ab_ranking_html += (
+            '<div style="margin:1em 0">'
+            '<div style="font-weight:bold;font-size:1.1em;padding:4px 0">'
+            '▼ 特定案件ランキング（[A]/[B]・応答率90%未満）</div>\n'
             '<table><tr>'
             '<th style="text-align:left">案件名</th>'
             '<th>着信</th><th>未応答</th><th>応答率</th>'
             '</tr>\n'
         )
-        for _p in _ab_stats:
+        for _pi, _p in enumerate(_ab_stats):
             _rc = rate_class(_p["rate"])
+            _did = f'ab-det-{_pi}'
             ab_ranking_html += (
-                f'<tr><td style="text-align:left">{_p["name"]}</td>'
+                f'<tr style="cursor:pointer" title="クリックで詳細を展開"'
+                f' onclick="var d=document.getElementById(\'{_did}\');'
+                f'd.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">'
+                f'<td style="text-align:left">{_p["name"]}</td>'
                 f'<td>{_p["total"]}</td><td>{_p["missed"]}</td>'
                 f'<td class="{_rc}">{_p["rate"]}%</td></tr>\n'
             )
-        ab_ranking_html += '</table>\n'
-        for _p in _ab_stats:
             _pn = _p["name"]
-            ab_ranking_html += (
-                f'<details style="margin-top:0.8em">'
-                f'<summary style="cursor:pointer;font-weight:bold;padding:2px 0">{_pn}</summary>\n'
-            )
             _hg: dict = {}
             for _h, _c in _ab_by_proj[_pn]:
                 if _h not in _hg:
                     _hg[_h] = []
                 _hg[_h].append(_c)
-            ab_ranking_html += (
+            _det = (
                 '<table><tr><th>時間帯</th><th>着信</th><th>未応答</th>'
                 '<th>稼働OP数</th><th style="text-align:left">取れなかった理由</th></tr>\n'
             )
@@ -1259,13 +1255,18 @@ def build_html(d: dict) -> str:
                     )
                 else:
                     _rstr = "確認できません"
-                ab_ranking_html += (
+                _det += (
                     f'<tr><td>{_h}時台</td><td>{_th}</td><td>{_mh}</td>'
                     f'<td>{_oh}</td>'
                     f'<td style="text-align:left">{_rstr}</td></tr>\n'
                 )
-            ab_ranking_html += '</table>\n</details>\n'
-        ab_ranking_html += '</details>\n'
+            _det += '</table>'
+            ab_ranking_html += (
+                f'<tr id="{_did}" style="display:none">'
+                f'<td colspan="4" style="padding:8px;background:#f9f9f9">{_det}</td>'
+                f'</tr>\n'
+            )
+        ab_ranking_html += '</table>\n</div>\n'
     else:
         ab_ranking_html = ""
 
