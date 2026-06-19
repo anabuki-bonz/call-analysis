@@ -2744,6 +2744,13 @@ def _scope_report_html(body_html: str, dk: str) -> str:
         ("getElementById('arrow-' + h)",       f"getElementById('arrow-{dk}-' + h)"),
         ("getElementById('ranking-section')",  f"getElementById('ranking-section-{dk}')"),
         ("getElementById('search-count')",     f"getElementById('search-count-{dk}')"),
+        ('onclick="toggleAbRow(',              f'onclick="toggleAbRow_{dk}('),
+        ('function toggleAbRow(',              f'function toggleAbRow_{dk}('),
+        ('"ab-row-',                            f'"ab-row-{dk}-'),
+        ('"ab-det-',                            f'"ab-det-{dk}-'),
+        ("'ab-row-",                            f"'ab-row-{dk}-"),
+        ("'ab-det-",                            f"'ab-det-{dk}-"),
+        ("id^=\"ab-det-\"",                    f"id^=\"ab-det-{dk}-\""),
     ]:
         body_html = body_html.replace(old, new)
     return body_html
