@@ -2140,7 +2140,7 @@ function buildTypeDayTab(rows, viewId, tabId) {
   });
   if(!types.length) return '<p style="color:#aaa">データなし</p>';
   types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  types.forEach(function(t,i){typeNums[t]=i+1;});
+  types.forEach(function(t,i){typeNums[t]=isNaN(+t)?i+1:+t;});
   var mat={};
   types.forEach(function(t){mat[t]={};});
   rows.forEach(function(r){
@@ -2187,7 +2187,7 @@ function buildTypeHourTab(rows, viewId, tabId) {
   });
   if(!types.length) return '<p style="color:#aaa">データなし</p>';
   types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  types.forEach(function(t,i){typeNums[t]=i+1;});
+  types.forEach(function(t,i){typeNums[t]=isNaN(+t)?i+1:+t;});
   var mat={};
   types.forEach(function(t){mat[t]=new Array(24).fill(null).map(function(){return{total:0,got:0};});});
   rows.forEach(function(r){
@@ -2233,7 +2233,7 @@ function buildTypeWeekdayTab(rows, viewId, tabId) {
   });
   if(!types.length) return '<p style="color:#aaa">データなし</p>';
   types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  types.forEach(function(t,i){typeNums[t]=i+1;});
+  types.forEach(function(t,i){typeNums[t]=isNaN(+t)?i+1:+t;});
   var mat={};
   types.forEach(function(t){mat[t]={};WDAYS.forEach(function(w){mat[t][w]={total:0,got:0};});});
   rows.forEach(function(r){
@@ -2573,7 +2573,7 @@ function buildOpTypeTab(rows, viewId, tabId) {
   });
   if(!ops.length||!types.length) return '<p style="color:#aaa">\u30c7\u30fc\u30bf\u306a\u3057</p>';
   types.sort(function(a,b){return (+a||0)-(+b||0)||a.localeCompare(b);});
-  types.forEach(function(t,i){typeNums[t]=i+1;});
+  types.forEach(function(t,i){typeNums[t]=isNaN(+t)?i+1:+t;});
   var mat={};
   ops.forEach(function(z){mat[z]={};types.forEach(function(t){mat[z][t]={total:0,got:0};});});
   rows.forEach(function(r){
