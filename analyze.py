@@ -425,7 +425,7 @@ def _hourly_breakdown(cdr: pd.DataFrame, d: date, in_ext_types: set) -> dict[int
 
 def analyze(target_date: date,
             cdr: pd.DataFrame, stf: pd.DataFrame,
-            ext: pd.DataFrame, ring: pd.DataFrame) -> tuple[str, str]:
+            ext: pd.DataFrame, ring: pd.DataFrame) -> str:
     date_str = str(target_date)
     date_csv = date_str.replace("-", "/")
 
@@ -442,7 +442,7 @@ def analyze(target_date: date,
 
     if in_df.empty:
         msg = "データなし（着信判定=TRUEのレコードが見つかりません）"
-        return f"# {date_csv} 分析結果\n\n{msg}\n", f"<html><body><p>{msg}</p></body></html>"
+        return f"<html><body><p>{msg}</p></body></html>"
 
     weekday  = in_df["曜日"].iloc[0]
     miss_df  = in_df[in_df["入電結果"] == False]
